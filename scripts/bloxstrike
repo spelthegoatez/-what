@@ -70,6 +70,8 @@ local State = {
     Spinbot = false,
     SpinbotSpeed = 360,
     ThirdPerson = false,
+    MusicEnabled = false,
+    MusicTrack = 'among us theme',
 }
 local Originals = {
     setWeaponRecoil = CameraController.setWeaponRecoil,
@@ -96,12 +98,45 @@ local HITSOUND_IDS = {
     ['minecraft ding'] = 'rbxassetid://135478009117226',
     ['minecraft'] = 'rbxassetid://103315511081890',
 }
+local MUSIC_IDS = {
+    ['among us theme'] = 'rbxassetid://89816285393309',
+    ['relaxed scene'] = 'rbxassetid://1848354536',
+    ['menu theme'] = 'rbxassetid://114376757380093',
+    ['super aura'] = 'rbxassetid://95131770144654',
+}
 local hitSoundTemplate = Instance.new('Sound')
 
 hitSoundTemplate.Name = 'HitsoundTemplate'
 hitSoundTemplate.SoundId = HITSOUND_IDS['cs:go']
 hitSoundTemplate.Volume = 1
 hitSoundTemplate.Parent = SoundService
+
+local musicPlayer = Instance.new('Sound')
+
+musicPlayer.Name = 'MusicPlayer'
+musicPlayer.Volume = 1
+musicPlayer.Looped = true
+musicPlayer.Parent = SoundService
+
+local function updateMusic()
+    if State.MusicEnabled and State.MusicTrack then
+        local id = MUSIC_IDS[State.MusicTrack]
+
+        if id then
+            if musicPlayer.SoundId ~= id then
+                musicPlayer.SoundId = id
+            end
+            if not musicPlayer.Playing then
+                musicPlayer:Play()
+            end
+
+            return
+        end
+    end
+    if musicPlayer.Playing then
+        musicPlayer:Stop()
+    end
+end
 
 local function playHitsound()
     local id = HITSOUND_IDS[State.HitsoundPack]
@@ -1727,7 +1762,7 @@ do
         end
         for name, data in pairs(esp)do
             if type(data) == 'table' and data.objects and not seen[name] then
-                esp:remove_object({Name = name})
+                esp:removeObject({Name = name})
             end
         end
     end)
@@ -1915,7 +1950,7 @@ end)
 
 local Misc = Win:AddTab('Misc')
 local RegisterTab = Misc:AddSubTab('Register')
-local RegisterSec = RegisterTab:AddSection('Hitsounds', 'Left')
+local RegisterSec = RegisterTab:AddSection('Sounds', 'Left')
 local HitsoundsToggle = RegisterSec:AddToggle('hitsounds', false, function(on)
     State.Hitsounds = on
 end)
@@ -1943,6 +1978,24 @@ end, {
 })
 
 RemoveGameHitToggle:DependsOn(HitsoundsToggle, true)
+
+local MusicToggle = RegisterSec:AddToggle('music player', false, function(on)
+    State.MusicEnabled = on
+
+    updateMusic()
+end)
+local MusicDropdown = RegisterSec:AddDropdown('music', {
+    'among us theme',
+    'relaxed scene',
+    'menu theme',
+    'super aura',
+}, 'among us theme', function(v)
+    State.MusicTrack = v
+
+    updateMusic()
+end)
+
+MusicDropdown:DependsOn(MusicToggle, true)
 
 local PlayerTab = Misc:AddSubTab('Player')
 local AntiAimSec = PlayerTab:AddSection('Anti-Aim', 'Left')
