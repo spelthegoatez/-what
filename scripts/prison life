@@ -1,0 +1,1248 @@
+local Players = game:GetService('Players')
+local RunService = game:GetService('RunService')
+local UserInputService = game:GetService('UserInputService')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local SoundService = game:GetService('SoundService')
+local HttpService = game:GetService('HttpService')
+local Debris = game:GetService('Debris')
+local TweenService = game:GetService('TweenService')
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local FIRE_RATE = 0.03
+local TARGET_TEAM_NAME = 'Criminals'
+local FLY_SPEED = 100
+local ORBIT_SPEED = 6
+local ORBIT_RADIUS = 12
+local ORBIT_LERP = 0.5
+local TRACER_FADE_IN = 0.5
+local TRACER_HOLD = 2
+local TRACER_FADE_OUT = 0.5
+local HITSOUND_ID = 'rbxassetid://133002449941130'
+local HITSOUND_VOLUME = 1.5
+local HIT_WINDOW = 0.5
+local DMG_NUMBER_COLOR = Color3.fromRGB(255, 255, 0)
+local DMG_DURATION = 1
+local DMG_RISE_SPEED = 6
+local rageEnabled = true
+local flyEnabled = true
+local orbitEnabled = false
+local tracersEnabled = true
+local hitsoundEnabled = true
+local dmgNumbersEnabled = true
+local GunRemotes = ReplicatedStorage:WaitForChild('GunRemotes', 10)
+local ShootEvent = GunRemotes and GunRemotes:WaitForChild('ShootEvent', 10)
+local FuncReload = GunRemotes and GunRemotes:WaitForChild('FuncReload', 10)
+local Remotes = ReplicatedStorage:WaitForChild('Remotes', 10)
+local GiverPressed = Remotes and Remotes:WaitForChild('GiverPressed', 10)
+local BulletsLabel = nil
+
+task.spawn(function()
+    local PlayerGui = LocalPlayer:WaitForChild('PlayerGui')
+    local HomeGui = PlayerGui:WaitForChild('Home', 15)
+
+    if not HomeGui then
+        return
+    end
+
+    local hud = HomeGui:WaitForChild('hud', 15)
+
+    if not hud then
+        return
+    end
+
+    local GunFrame = hud:WaitForChild('BottomRightFrame', 15)
+
+    if not GunFrame then
+        return
+    end
+
+    GunFrame = GunFrame:WaitForChild('GunFrame', 15)
+
+    if not GunFrame then
+        return
+    end
+
+    BulletsLabel = GunFrame:WaitForChild('BulletsLabel', 15)
+end)
+
+local unpack = table.unpack or unpack
+local Fonts
+
+do
+    local HttpSvc = cloneref and cloneref(HttpService) or HttpService
+
+    Fonts = {
+        Folder = 'CustomFonts',
+        verdana = {
+            FileName = {
+                'verdana.ttf',
+                'verdana.json',
+            },
+            Url = 'https://github.com/sametexe001/luas/raw/refs/heads/main/fonts/verdana.ttf',
+        },
+    }
+
+    if not isfolder(Fonts.Folder) then
+        makefolder(Fonts.Folder)
+    end
+
+    for Name, FontData in pairs(Fonts)do
+        if type(FontData) == 'table' then
+            local FileName = FontData.FileName
+
+            if not isfile(Fonts.Folder .. '/' .. FileName[1]) then
+                writefile(Fonts.Folder .. '/' .. FileName[1], game:HttpGet(FontData.Url))
+            end
+
+            local Data = {
+                Name = Name,
+                Faces = {
+                    {
+                        Name = 'Regular',
+                        Weight = 200,
+                        Style = 'Regular',
+                        AssetId = getcustomasset(Fonts.Folder .. '/' .. FileName[1]),
+                    },
+                },
+            }
+
+            if not isfile(Fonts.Folder .. '/' .. FileName[2]) then
+                writefile(Fonts.Folder .. '/' .. FileName[2], HttpSvc:JSONEncode(Data))
+            end
+        end
+    end
+
+    function Fonts.GetFont(Name)
+        for FontName, FontData in pairs(Fonts)do
+            if FontName == Name then
+                return Font.new(getcustomasset(Fonts.Folder .. '/' .. FontData.FileName[2]))
+            end
+        end
+    end
+end
+
+local verdanaFont = Fonts.GetFont('verdana')
+
+local function isSameTeam(player)
+    if LocalPlayer.Team == nil or player.Team == nil then
+        return false
+    end
+
+    return LocalPlayer.Team == player.Team
+end
+local function isVisibleFromCamera(targetPart)
+    local character = LocalPlayer.Character
+
+    if not character then
+        return false
+    end
+
+    local origin = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local rp = RaycastParams.new()
+
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = {character, Camera}
+    rp.IgnoreWater = true
+
+    local result = workspace:Raycast(origin, direction, rp)
+
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+
+    return true
+end
+local function hasLineOfSight(targetPart)
+    local character = LocalPlayer.Character
+
+    if not character then
+        return false
+    end
+
+    local head = character:FindFirstChild('Head')
+
+    if not head then
+        return false
+    end
+
+    local origin = head.Position
+    local direction = targetPart.Position - origin
+    local rp = RaycastParams.new()
+
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = {character, Camera}
+    rp.IgnoreWater = true
+
+    local result = workspace:Raycast(origin, direction, rp)
+
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+
+    return true
+end
+local function isCriminal(player)
+    if not player then
+        return false
+    end
+
+    local team = player.Team
+
+    if not team then
+        return
+    end
+
+    return team.Name == TARGET_TEAM_NAME
+end
+local function isInVehicle(humanoid)
+    if not humanoid then
+        return false
+    end
+
+    return humanoid.SeatPart ~= nil
+end
+
+task.spawn(function()
+    while task.wait(0.1) do
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass('Humanoid')
+
+        if hum then
+            pcall(function()
+                hum.Sit = false
+            end)
+
+            if hum.SeatPart then
+                pcall(function()
+                    hum.Sit = false
+                    hum.SeatPart = nil
+
+                    hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                end)
+            end
+        end
+    end
+end)
+task.spawn(function()
+    local function hookSeat(seat)
+        if not seat:IsA('Seat') then
+            return
+        end
+
+        seat:GetPropertyChangedSignal('Occupant'):Connect(function()
+            if seat.Occupant then
+                local char = LocalPlayer.Character
+                local hum = char and char:FindFirstChildOfClass('Humanoid')
+
+                if hum and seat.Occupant == hum then
+                    pcall(function()
+                        hum.Sit = false
+
+                        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                    end)
+                end
+            end
+        end)
+    end
+
+    for _, v in ipairs(workspace:GetDescendants())do
+        if v:IsA('Seat') then
+            hookSeat(v)
+        end
+    end
+
+    workspace.DescendantAdded:Connect(function(v)
+        if v:IsA('Seat') then
+            hookSeat(v)
+        end
+    end)
+end)
+
+local closestHitPart = nil
+local lockedTarget = nil
+
+local function getClosestEnemy()
+    local closestPart, closestDistance = nil, math.huge
+    local myPos = Camera.CFrame.Position
+
+    for _, player in ipairs(Players:GetPlayers())do
+        if player ~= LocalPlayer and player.Character and not isSameTeam(player) then
+            local hrp = player.Character:FindFirstChild('HumanoidRootPart')
+            local hum = player.Character:FindFirstChild('Humanoid')
+
+            if hrp and hum and hum.Health > 0 then
+                local distance = (hrp.Position - myPos).Magnitude
+
+                if distance < closestDistance and isVisibleFromCamera(hrp) then
+                    closestDistance = distance
+                    closestPart = hrp
+                end
+            end
+        end
+    end
+
+    return closestPart
+end
+local function getClosestCriminalNoWall()
+    local closestPart, closestDistance = nil, math.huge
+    local myPos = Camera.CFrame.Position
+
+    for _, player in ipairs(Players:GetPlayers())do
+        if player ~= LocalPlayer and player.Character and not isSameTeam(player) and isCriminal(player) then
+            local hrp = player.Character:FindFirstChild('HumanoidRootPart')
+            local hum = player.Character:FindFirstChild('Humanoid')
+
+            if hrp and hum and hum.Health > 0 then
+                local distance = (hrp.Position - myPos).Magnitude
+
+                if distance < closestDistance then
+                    closestDistance = distance
+                    closestPart = hrp
+                end
+            end
+        end
+    end
+
+    return closestPart
+end
+local function getLockedTarget()
+    if lockedTarget and lockedTarget.Parent then
+        local hum = lockedTarget.Parent:FindFirstChildOfClass('Humanoid')
+
+        if hum and hum.Health > 0 then
+            return lockedTarget
+        end
+    end
+
+    lockedTarget = getClosestCriminalNoWall()
+
+    return lockedTarget
+end
+
+RunService.Heartbeat:Connect(function()
+    closestHitPart = getClosestEnemy()
+end)
+
+local function patchTool(tool)
+    if typeof(tool) ~= 'Instance' or not tool:IsA('Tool') then
+        return
+    end
+    if tool:GetAttribute('ToolType') ~= 'Gun' then
+        return
+    end
+
+    tool:SetAttribute('FireRate', FIRE_RATE)
+    tool:SetAttribute('AutoFire', true)
+    tool:SetAttribute('SpreadRadius', 0)
+end
+local function watch(container)
+    if not container then
+        return
+    end
+
+    for _, v in ipairs(container:GetChildren())do
+        if v:IsA('Tool') then
+            patchTool(v)
+        end
+    end
+
+    container.ChildAdded:Connect(function(v)
+        if v:IsA('Tool') then
+            patchTool(v)
+        end
+    end)
+end
+
+if LocalPlayer:FindFirstChild('Backpack') then
+    watch(LocalPlayer.Backpack)
+end
+if LocalPlayer.Character then
+    watch(LocalPlayer.Character)
+end
+
+LocalPlayer.ChildAdded:Connect(function(c)
+    if c.Name == 'Backpack' then
+        watch(c)
+    end
+end)
+LocalPlayer.CharacterAdded:Connect(function(char)
+    watch(char)
+
+    local bp = LocalPlayer:FindFirstChild('Backpack')
+
+    if bp then
+        watch(bp)
+    end
+end)
+
+local activeTracers = {}
+
+local function createTracer(fromPos, toPos)
+    if not tracersEnabled then
+        return
+    end
+
+    local line = Drawing.new('Line')
+
+    line.Visible = false
+    line.Color = Color3.new(1, 1, 1)
+    line.Thickness = 1.5
+    line.Transparency = 0
+    line.ZIndex = 9999
+
+    table.insert(activeTracers, {
+        line = line,
+        from = fromPos,
+        to = toPos,
+        startTime = tick(),
+    })
+end
+
+RunService.RenderStepped:Connect(function()
+    local now = tick()
+
+    for i = #activeTracers, 1, -1 do
+        local t = activeTracers[i]
+        local age = now - t.startTime
+        local total = TRACER_FADE_IN + TRACER_HOLD + TRACER_FADE_OUT
+
+        if age >= total then
+            t.line:Remove()
+            table.remove(activeTracers, i)
+        else
+            local alpha
+
+            if age < TRACER_FADE_IN then
+                alpha = age / TRACER_FADE_IN
+            elseif age < TRACER_FADE_IN + TRACER_HOLD then
+                alpha = 1
+            else
+                alpha = 1 - ((age - TRACER_FADE_IN - TRACER_HOLD) / TRACER_FADE_OUT)
+            end
+
+            local fromScreen, fromOn = Camera:WorldToViewportPoint(t.from)
+            local toScreen, toOn = Camera:WorldToViewportPoint(t.to)
+
+            if fromOn and toOn and fromScreen.Z > 0 and toScreen.Z > 0 then
+                t.line.Visible = true
+                t.line.From = Vector2.new(fromScreen.X, fromScreen.Y)
+                t.line.To = Vector2.new(toScreen.X, toScreen.Y)
+                t.line.Transparency = 1 - math.clamp(alpha, 0, 1)
+            else
+                t.line.Visible = false
+            end
+        end
+    end
+end)
+
+local activeWatchers = {}
+
+local function playHitSound()
+    if not hitsoundEnabled then
+        return
+    end
+
+    local s = Instance.new('Sound')
+
+    s.SoundId = HITSOUND_ID
+    s.Volume = HITSOUND_VOLUME
+    s.Parent = SoundService
+
+    s:Play()
+    Debris:AddItem(s, 2)
+end
+local function createDamageNumber(worldPos, damage)
+    if not dmgNumbersEnabled then
+        return
+    end
+
+    local part = Instance.new('Part')
+
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.Transparency = 1
+    part.Size = Vector3.new(0.1, 0.1, 0.1)
+    part.CFrame = CFrame.new(worldPos)
+    part.Name = 'DmgNumber'
+    part.Parent = workspace
+
+    local billboard = Instance.new('BillboardGui')
+
+    billboard.Size = UDim2.fromOffset(140, 70)
+    billboard.AlwaysOnTop = true
+    billboard.LightInfluence = 0
+    billboard.Parent = part
+
+    local label = Instance.new('TextLabel')
+
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.fromScale(1, 1)
+    label.Text = tostring(damage)
+    label.TextColor3 = DMG_NUMBER_COLOR
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    label.TextScaled = true
+    label.FontFace = verdanaFont
+    label.Parent = billboard
+
+    task.spawn(function()
+        local startTime = tick()
+
+        while part.Parent do
+            local age = tick() - startTime
+            local progress = age / DMG_DURATION
+
+            if progress >= 1 then
+                break
+            end
+
+            part.CFrame = CFrame.new(worldPos + Vector3.new(0, progress * DMG_RISE_SPEED, 0))
+            label.TextTransparency = progress
+            label.TextStrokeTransparency = progress
+
+            RunService.RenderStepped:Wait()
+        end
+
+        part:Destroy()
+    end)
+end
+local function watchForHit(humanoid)
+    if not humanoid then
+        return
+    end
+    if activeWatchers[humanoid] then
+        return
+    end
+
+    local lastHealth = humanoid.Health
+    local startTime = tick()
+    local conn
+
+    conn = humanoid.HealthChanged:Connect(function(newHealth)
+        local dmg = lastHealth - newHealth
+
+        lastHealth = newHealth
+
+        if dmg > 0 then
+            playHitSound()
+
+            local char = humanoid.Parent
+            local head = char and char:FindFirstChild('Head')
+
+            if head then
+                createDamageNumber(head.Position + Vector3.new(0, 2.5, 0), math.floor(dmg + 0.5))
+            end
+        end
+        if tick() - startTime > HIT_WINDOW then
+            if activeWatchers[humanoid] == conn then
+                conn:Disconnect()
+
+                activeWatchers[humanoid] = nil
+            end
+        end
+    end)
+    activeWatchers[humanoid] = conn
+
+    task.delay(HIT_WINDOW + 0.1, function()
+        if activeWatchers[humanoid] == conn then
+            conn:Disconnect()
+
+            activeWatchers[humanoid] = nil
+        end
+    end)
+end
+
+local flyBV, flyBG
+local heldKeys = {}
+
+local function setupFly(character)
+    local hrp = character:WaitForChild('HumanoidRootPart', 5)
+
+    if not hrp then
+        return
+    end
+    if flyBV then
+        flyBV:Destroy()
+    end
+    if flyBG then
+        flyBG:Destroy()
+    end
+
+    flyBV = Instance.new('BodyVelocity')
+    flyBV.Name = 'FlyBV'
+    flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    flyBV.Velocity = Vector3.zero
+    flyBV.P = 1250
+    flyBV.Parent = hrp
+    flyBG = Instance.new('BodyGyro')
+    flyBG.Name = 'FlyBG'
+    flyBG.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    flyBG.P = 10000
+    flyBG.D = 100
+    flyBG.CFrame = hrp.CFrame
+    flyBG.Parent = hrp
+    flyBV.MaxForce = Vector3.zero
+    flyBG.MaxTorque = Vector3.zero
+end
+
+if LocalPlayer.Character then
+    task.spawn(setupFly, LocalPlayer.Character)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.spawn(setupFly, char)
+end)
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then
+        return
+    end
+
+    heldKeys[input.KeyCode] = true
+end)
+UserInputService.InputEnded:Connect(function(input)
+    heldKeys[input.KeyCode] = false
+end)
+
+local function setFlyActive(active)
+    if not flyBV or not flyBV.Parent or not flyBG or not flyBG.Parent then
+        return
+    end
+    if active then
+        flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        flyBG.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    else
+        flyBV.MaxForce = Vector3.zero
+        flyBG.MaxTorque = Vector3.zero
+        flyBV.Velocity = Vector3.zero
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    if _G.AutoGrabLock then
+        return
+    end
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild('HumanoidRootPart')
+
+    if not hrp or not flyBV or not flyBV.Parent or not flyBG or not flyBG.Parent then
+        return
+    end
+    if orbitEnabled then
+        setFlyActive(true)
+
+        local target = getLockedTarget()
+
+        if target and target.Parent then
+            local targetHum = target.Parent:FindFirstChildOfClass('Humanoid')
+            local targetPos = target.Position
+            local lookCFrame
+
+            if isInVehicle(targetHum) then
+                lookCFrame = CFrame.new(targetPos) * (target.CFrame - target.Position)
+            else
+                local angle = tick() * ORBIT_SPEED
+                local yOffset = 0
+
+                if heldKeys[Enum.KeyCode.Space] then
+                    yOffset = yOffset + 10
+                end
+                if heldKeys[Enum.KeyCode.LeftControl] then
+                    yOffset = yOffset - 10
+                end
+
+                local orbitPos = targetPos + Vector3.new(math.cos(angle) * ORBIT_RADIUS, yOffset, math.sin(angle) * ORBIT_RADIUS)
+
+                lookCFrame = CFrame.new(orbitPos, targetPos)
+            end
+
+            local newCFrame = hrp.CFrame:Lerp(lookCFrame, ORBIT_LERP)
+
+            hrp.CFrame = newCFrame
+            flyBV.Velocity = Vector3.zero
+            flyBG.CFrame = newCFrame
+        else
+            flyBV.Velocity = Vector3.zero
+            flyBG.CFrame = hrp.CFrame
+        end
+
+        return
+    end
+    if not flyEnabled then
+        setFlyActive(false)
+
+        return
+    end
+
+    setFlyActive(true)
+
+    local cam = workspace.CurrentCamera.CFrame
+    local moveDir = Vector3.zero
+
+    if heldKeys[Enum.KeyCode.W] then
+        moveDir = moveDir + cam.LookVector
+    end
+    if heldKeys[Enum.KeyCode.S] then
+        moveDir = moveDir - cam.LookVector
+    end
+    if heldKeys[Enum.KeyCode.A] then
+        moveDir = moveDir - cam.RightVector
+    end
+    if heldKeys[Enum.KeyCode.D] then
+        moveDir = moveDir + cam.RightVector
+    end
+    if heldKeys[Enum.KeyCode.Space] then
+        moveDir = moveDir + Vector3.new(0, 1, 0)
+    end
+    if heldKeys[Enum.KeyCode.LeftControl] then
+        moveDir = moveDir - Vector3.new(0, 1, 0)
+    end
+    if moveDir.Magnitude > 0 then
+        moveDir = moveDir.Unit * FLY_SPEED
+    end
+
+    flyBV.Velocity = moveDir
+    flyBG.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.LookVector)
+end)
+
+local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/ergthhejasert-wq/uilib/refs/heads/main/library.lua'))()
+
+if not Library then
+    error('ui failed to load.', 0)
+end
+
+local Win = Library:Window('spel.script', UDim2.fromOffset(620, 560))
+local MainTab = Win:AddTab('Main')
+local CombatL = MainTab:AddSection('ragebot', 'Left')
+local CombatR = MainTab:AddSection('visuals', 'Right')
+
+CombatL:AddToggle('ragebot', rageEnabled, function(on)
+    rageEnabled = on
+end):AddKeybind(Enum.KeyCode.E, {
+    Mode = 'Toggle',
+})
+CombatL:AddTextbox('target team', TARGET_TEAM_NAME, 'team name...', function(text, enter)
+    if text and text ~= '' then
+        TARGET_TEAM_NAME = text
+    end
+end)
+CombatR:AddToggle('tracers', tracersEnabled, function(on)
+    tracersEnabled = on
+end):AddColorpicker('tracer color', Color3.new(1, 1, 1), 1, function(c, a) end)
+CombatR:AddToggle('hitsounds', hitsoundEnabled, function(on)
+    hitsoundEnabled = on
+end)
+CombatR:AddToggle('damage numbers', dmgNumbersEnabled, function(on)
+    dmgNumbersEnabled = on
+end):AddColorpicker('damage color', DMG_NUMBER_COLOR, 1, function(c, a)
+    DMG_NUMBER_COLOR = c
+end)
+
+local MoveTab = Win:AddTab('Movement')
+local MoveL = MoveTab:AddSection('fly', 'Left')
+local MoveR = MoveTab:AddSection('orbit', 'Right')
+
+MoveL:AddToggle('fly', flyEnabled, function(on)
+    flyEnabled = on
+end):AddKeybind(Enum.KeyCode.F, {
+    Mode = 'Toggle',
+})
+MoveL:AddSlider('fly speed', 10, 300, FLY_SPEED, function(v)
+    FLY_SPEED = v
+end)
+MoveR:AddToggle('orbit', orbitEnabled, function(on)
+    orbitEnabled = on
+end)
+MoveR:AddSlider('orbit speed', 1, 20, ORBIT_SPEED, function(v)
+    ORBIT_SPEED = v
+end)
+MoveR:AddSlider('orbit radius', 4, 40, ORBIT_RADIUS, function(v)
+    ORBIT_RADIUS = v
+end)
+MoveR:AddSlider('orbit lerp', 0.1, 1, ORBIT_LERP, function(v)
+    ORBIT_LERP = v
+end)
+
+local PlayersTab = Win:AddTab('Players')
+local Filters = PlayersTab:AddSection('filters', 'Left')
+
+Filters:AddToggle('team check', false)
+Filters:AddDropdown('sort by', {
+    'Name',
+    'Distance',
+    'Team',
+}, 'Name', function(v) end)
+Filters:AddToggle('show hidden', false)
+Filters:AddToggle('highlight target', true)
+PlayersTab:PlayerList()
+
+local Settings = Win:AddTab('Settings')
+local AppSec = Settings:AddSection('appearance', 'Left')
+local ThemeNames = {}
+
+for _, T in Library.AppearanceThemes do
+    ThemeNames[#ThemeNames + 1] = T.Name
+end
+
+AppSec:AddDropdown('theme', ThemeNames, 'Default', function(name)
+    Library:ApplyTheme(name)
+end)
+AppSec:AddColorpicker('accent', Library.Palette.Default.Accent, 1, function(c)
+    Library:AppApplyAccent(c)
+end)
+AppSec:AddColorpicker('background', Library.Palette.Default.Top, 1, function(c)
+    Library:AppApplyBackTop(c)
+end)
+AppSec:AddColorpicker('lowlight', Library.Palette.Default.Bottom, 1, function(c)
+    Library:AppApplyBackBottom(c)
+end)
+AppSec:AddColorpicker('outline', Library.Palette.Default.Outline, 1, function(c)
+    Library:AppApplyOutline(c)
+end)
+AppSec:AddColorpicker('inner outline', Library.Palette.Default.InnerOutline, 1, function(c)
+    Library:AppApplyInnerOutline(c)
+end)
+AppSec:AddColorpicker('title color', Library.Palette.Default.TitleBottom, 1, function(c)
+    Library:AppApplyTitleColor(c)
+end)
+AppSec:AddColorpicker('shadow color', Library.Palette.Default.Shadow, 1, function(c)
+    Library:AppApplyShadow(c)
+end)
+AppSec:AddSlider('shadow size', 0, 40, Library.Palette.Default.ShadowSize, function(v)
+    Library:AppApplyShadowSize(v)
+end)
+AppSec:AddSlider('shadow offset', -20, 20, Library.Palette.Default.ShadowOffset, function(v)
+    Library:AppApplyShadowOffset(v)
+end)
+
+local OverlaySec = Settings:AddSection('overlay', 'Left')
+local MenuToggle = OverlaySec:AddToggle('menu', true, function(v)
+    if Win.Gui then
+        Library:FadeGui(Win.Gui, v)
+    end
+    if Library.SyncBlur then
+        Library:SyncBlur()
+    end
+end)
+
+MenuToggle:AddKeybind(Enum.KeyCode.RightShift, {
+    Mode = 'Toggle',
+})
+OverlaySec:AddToggle('menu blur', false, function(v)
+    Library._MenuBlurOn = v
+
+    if Library.SyncBlur then
+        Library:SyncBlur()
+    end
+end)
+OverlaySec:AddToggle('watermark', true, function(v)
+    if Library.WatermarkState then
+        Library.WatermarkState:SetVisible(v)
+    end
+end)
+OverlaySec:AddToggle('keybind list', true, function(v)
+    if Library.KeybindListState then
+        Library.KeybindListState:SetVisible(v)
+    end
+end)
+OverlaySec:AddToggle('anonymous', false, function(v)
+    Library:AppApplyAnonymous(v)
+end)
+
+local CfgSec = Settings:AddSection('configs', 'Right')
+local CfgName = CfgSec:AddTextbox('config name', '', 'config name...')
+local CfgList = CfgSec:AddList('saved', Library:ListConfigs(), {
+    Height = 96,
+    Callback = function(v)
+        if v and v ~= '' then
+            CfgName:Set(v)
+        end
+    end,
+})
+
+local function CfgCurrent()
+    return (CfgName:Get():gsub('^%s+', ''):gsub('%s+$', ''))
+end
+local function CfgWrite(Name)
+    if typeof(writefile) ~= 'function' then
+        return
+    end
+
+    Library:EnsureConfigsFolder()
+
+    local Json = Library:GetConfig()
+
+    writefile(Library:ConfigPath(Name), (typeof(Json) == 'string') and Json or '{}')
+    CfgList:Refresh(Library:ListConfigs())
+end
+
+CfgSec:AddButton('create', function()
+    local Name = CfgCurrent()
+
+    if Name == '' then
+        return
+    end
+
+    CfgWrite(Name)
+end):AddButton('save', function()
+    local Name = CfgCurrent()
+
+    if Name == '' then
+        return
+    end
+
+    CfgWrite(Name)
+end)
+CfgSec:AddButton('load', function()
+    local Name = CfgCurrent()
+
+    if Name == '' then
+        return
+    end
+    if typeof(readfile) ~= 'function' then
+        return
+    end
+
+    local Path = Library:ConfigPath(Name)
+
+    if typeof(isfile) == 'function' and not isfile(Path) then
+        return
+    end
+
+    local Data = readfile(Path)
+
+    if typeof(Data) == 'string' then
+        Library:LoadConfig(Data)
+    end
+end):AddButton('delete', function()
+    local Name = CfgCurrent()
+
+    if Name == '' then
+        return
+    end
+    if typeof(delfile) ~= 'function' then
+        return
+    end
+
+    local Path = Library:ConfigPath(Name)
+
+    if typeof(isfile) == 'function' and not isfile(Path) then
+        return
+    end
+
+    delfile(Path)
+    CfgList:Refresh(Library:ListConfigs())
+end)
+
+local Watermark = Library:Watermark({
+    Segments = {
+        'spel.script',
+        LocalPlayer.Name,
+        '0 fps',
+    },
+})
+
+Library:KeybindList({
+    Title = 'keybinds',
+})
+task.spawn(function()
+    local Acc, Frames = 0, 0
+
+    while Watermark and Watermark.Gui and Watermark.Gui.Parent do
+        local Dt = RunService.RenderStepped:Wait()
+
+        Acc = Acc + Dt
+        Frames = Frames + 1
+
+        if Acc >= 0.25 then
+            Watermark:SetSegment(3, tostring(math.floor(Frames / Acc + 0.5)) .. ' fps')
+
+            Acc = 0
+            Frames = 0
+        end
+    end
+end)
+
+local function getEquippedGun()
+    local character = LocalPlayer.Character
+
+    if not character then
+        return nil
+    end
+
+    local tool = character:FindFirstChildOfClass('Tool')
+
+    if tool and tool:GetAttribute('ToolType') == 'Gun' then
+        return tool
+    end
+
+    return nil
+end
+local function getMuzzlePosition(tool)
+    if not tool then
+        local char = LocalPlayer.Character
+        local head = char and char:FindFirstChild('Head')
+
+        return head and head.Position or Camera.CFrame.Position
+    end
+
+    local muzzle = tool:FindFirstChild('Muzzle', true)
+
+    if muzzle then
+        if muzzle:IsA('BasePart') then
+            return muzzle.Position
+        elseif muzzle:IsA('Attachment') then
+            return muzzle.WorldPosition
+        end
+    end
+
+    local handle = tool:FindFirstChild('Handle')
+
+    if handle and handle:IsA('BasePart') then
+        return handle.Position
+    end
+
+    local char = LocalPlayer.Character
+    local head = char and char:FindFirstChild('Head')
+
+    return head and head.Position or Camera.CFrame.Position
+end
+local function updateAmmoLabel(tool)
+    if not BulletsLabel then
+        return
+    end
+
+    local ammo = tool:GetAttribute('Local_CurrentAmmo') or 0
+    local maxAmmo = tool:GetAttribute('MaxAmmo') or 0
+    local behavior = tool:GetAttribute('Behavior')
+
+    if behavior == 'Sniper' then
+        local stored = tool:GetAttribute('StoredAmmo') or 0
+
+        BulletsLabel.Text = ammo .. ' | ' .. stored
+    else
+        BulletsLabel.Text = ammo .. '/' .. maxAmmo
+    end
+end
+local function autoReload(tool)
+    if not tool or not FuncReload then
+        return
+    end
+    if tool:GetAttribute('Local_ReloadSession') > 0 then
+        return
+    end
+
+    local reloadTime = tool:GetAttribute('ReloadTime') or 1
+    local maxAmmo = tool:GetAttribute('MaxAmmo') or 0
+    local behavior = tool:GetAttribute('Behavior')
+    local session = tick()
+
+    tool:SetAttribute('Local_ReloadSession', session)
+
+    if BulletsLabel then
+        BulletsLabel.Text = '...'
+    end
+
+    pcall(function()
+        FuncReload:InvokeServer()
+    end)
+    task.wait(reloadTime)
+
+    if tool.Parent and tool:GetAttribute('Local_ReloadSession') == session then
+        if behavior == 'Sniper' then
+            local stored = tool:GetAttribute('StoredAmmo') or 0
+
+            if stored > 0 then
+                tool:SetAttribute('Local_CurrentAmmo', 1)
+                tool:SetAttribute('StoredAmmo', stored - 1)
+            else
+                tool:SetAttribute('Local_CurrentAmmo', 0)
+            end
+        else
+            tool:SetAttribute('Local_CurrentAmmo', maxAmmo)
+        end
+
+        updateAmmoLabel(tool)
+        tool:SetAttribute('Local_ReloadSession', 0)
+    end
+end
+
+task.spawn(function()
+    local reloading = false
+
+    while true do
+        task.wait(FIRE_RATE)
+
+        if not rageEnabled then
+            continue
+        end
+
+        local target = getLockedTarget()
+        local tool = getEquippedGun()
+
+        if tool and target and target.Parent then
+            local ammo = tool:GetAttribute('Local_CurrentAmmo') or 0
+            local session = tool:GetAttribute('Local_ReloadSession') or 0
+
+            if hasLineOfSight(target) then
+                if ammo <= 0 and session == 0 and not reloading then
+                    reloading = true
+
+                    task.spawn(function()
+                        autoReload(tool)
+
+                        reloading = false
+                    end)
+                end
+                if ammo > 0 and session == 0 then
+                    local character = LocalPlayer.Character
+                    local head = character and character:FindFirstChild('Head')
+
+                    if head and ShootEvent then
+                        local origin = head.Position
+                        local packet = {
+                            {
+                                origin,
+                                target.Position,
+                                target,
+                            },
+                        }
+                        local muzzlePos = getMuzzlePosition(tool)
+
+                        createTracer(muzzlePos, target.Position)
+                        pcall(function()
+                            ShootEvent:FireServer(packet)
+                        end)
+
+                        local tHum = target.Parent:FindFirstChildOfClass('Humanoid')
+
+                        if tHum then
+                            watchForHit(tHum)
+                        end
+
+                        local newAmmo = ammo - 1
+
+                        tool:SetAttribute('Local_CurrentAmmo', newAmmo)
+                        updateAmmoLabel(tool)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+_G.AutoGrabLock = false
+
+local function findTouchGiver()
+    local ok, target = pcall(function()
+        return workspace:GetChildren()[187]
+    end)
+
+    if not ok or not target then
+        return nil, nil
+    end
+
+    local tg = target:FindFirstChild('TouchGiver')
+
+    if tg and tg:IsA('BasePart') then
+        return tg, target
+    end
+    if target:IsA('BasePart') then
+        return target, target
+    end
+
+    return nil, target
+end
+local function autoGrabWeapon()
+    local char = LocalPlayer.Character
+    local hrp = char and char:WaitForChild('HumanoidRootPart', 5)
+
+    if not hrp then
+        return
+    end
+
+    local touchGiver, giverParent = findTouchGiver()
+
+    if not touchGiver then
+        return
+    end
+
+    _G.AutoGrabLock = true
+
+    if flyBV then
+        flyBV.Velocity = Vector3.zero
+    end
+    if flyBG then
+        flyBG.CFrame = CFrame.new(hrp.Position)
+    end
+
+    local savedCFrame = hrp.CFrame
+
+    hrp.CFrame = CFrame.new(touchGiver.Position + Vector3.new(0, 1.5, 0))
+
+    task.wait(0.35)
+
+    if GiverPressed and giverParent then
+        pcall(function()
+            GiverPressed:FireServer(giverParent)
+        end)
+    end
+
+    task.wait(0.25)
+
+    if hrp.Parent then
+        hrp.CFrame = savedCFrame
+    end
+
+    _G.AutoGrabLock = false
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(0.8)
+    task.spawn(autoGrabWeapon)
+end)
+
+if LocalPlayer.Character then
+    task.spawn(autoGrabWeapon)
+end
+
+local oldNamecall
+
+oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...)
+    local method = getnamecallmethod()
+    local self = ...
+
+    if method == 'Sit' and typeof(self) == 'Instance' and self:IsA('Seat') then
+        return nil
+    end
+    if method == 'Raycast' and self == workspace and not checkcaller() then
+        if rageEnabled then
+            local target = closestHitPart
+
+            if target and target.Parent then
+                local args = {...}
+                local origin = args[2]
+
+                args[3] = (target.Position - origin).Unit * 1000
+
+                return oldNamecall(unpack(args))
+            end
+        end
+    end
+    if method == 'GetAttributes' then
+        local attrs = oldNamecall(...)
+
+        if typeof(attrs) == 'table' and typeof(self) == 'Instance' and self:IsA('Tool') and self:GetAttribute('ToolType') == 'Gun' then
+            attrs.FireRate = FIRE_RATE
+            attrs.AutoFire = true
+            attrs.SpreadRadius = 0
+        end
+
+        return attrs
+    end
+
+    return oldNamecall(...)
+end))
