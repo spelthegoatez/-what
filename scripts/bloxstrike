@@ -86,6 +86,8 @@ local Originals = {
 }
 local HITSOUND_IDS = {
     ['cs:go'] = 'rbxassetid://133002449941130',
+    ['neverlose'] = 'rbxassetid://139452805868562',
+    ['cod'] = 'rbxassetid://77082587278347',
 }
 local hitSoundTemplate = Instance.new('Sound')
 
@@ -1912,6 +1914,8 @@ local HitsoundsToggle = RegisterSec:AddToggle('hitsounds', false, function(on)
 end)
 local HitsoundsDropdown = RegisterSec:AddDropdown('sound', {
     'cs:go',
+    'neverlose',
+    'cod',
 }, 'cs:go', function(v)
     State.HitsoundPack = v
 end)
