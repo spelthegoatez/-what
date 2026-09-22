@@ -15,6 +15,7 @@ local Characters = workspace:WaitForChild('Characters')
 local Bullet = require(ReplicatedStorage.Components.Weapon.Classes.Bullet)
 local CameraController = require(ReplicatedStorage.Controllers.CameraController)
 local invhandler = require(ReplicatedStorage:WaitForChild('Controllers'):WaitForChild('InventoryController'))
+local Remotes = require(ReplicatedStorage.Database.Security.Remotes)
 local oldKick
 
 oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
@@ -72,6 +73,8 @@ local State = {
     ThirdPerson = false,
     MusicEnabled = false,
     MusicTrack = 'among us theme',
+    DamageNumbers = false,
+    DamageNumberColor = Color3.fromRGB(255, 255, 0),
 }
 local Originals = {
     setWeaponRecoil = CameraController.setWeaponRecoil,
@@ -1762,7 +1765,7 @@ do
         end
         for name, data in pairs(esp)do
             if type(data) == 'table' and data.objects and not seen[name] then
-                esp:removeObject({Name = name})
+                esp:remove_object({Name = name})
             end
         end
     end)
@@ -1775,6 +1778,91 @@ do
         end)
     end)
 end
+
+local activeDamageNumbers = {}
+
+local function createDamageNumber(worldPos, damage)
+    local part = Instance.new('Part')
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.Transparency = 1
+    part.Size = Vector3.new(0.1, 0.1, 0.1)
+    part.CFrame = CFrame.new(worldPos)
+    part.Name = 'DmgNumber'
+    part.Parent = workspace
+
+    local billboard = Instance.new('BillboardGui')
+    billboard.Size = UDim2.fromOffset(140, 70)
+    billboard.AlwaysOnTop = true
+    billboard.LightInfluence = 0
+    billboard.MaxDistance = math.huge
+    billboard.Parent = part
+
+    local label = Instance.new('TextLabel')
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.fromScale(1, 1)
+    label.Text = tostring(damage)
+    label.TextColor3 = State.DamageNumberColor
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    label.TextScaled = true
+    label.FontFace = fonts.main
+    label.Parent = billboard
+
+    table.insert(activeDamageNumbers, {
+        part = part,
+        label = label,
+        startPos = worldPos,
+        startTime = tick(),
+    })
+end
+
+RunService.RenderStepped:Connect(function()
+    local now = tick()
+
+    for i = #activeDamageNumbers, 1, -1 do
+        local d = activeDamageNumbers[i]
+
+        if not d.part.Parent then
+            table.remove(activeDamageNumbers, i)
+            continue
+        end
+
+        local age = now - d.startTime
+        local progress = age / 1.0
+
+        if progress >= 1 then
+            d.part:Destroy()
+            table.remove(activeDamageNumbers, i)
+        else
+            d.part.CFrame = CFrame.new(d.startPos + Vector3.new(0, progress * 6, 0))
+            d.label.TextTransparency = progress
+            d.label.TextStrokeTransparency = progress
+        end
+    end
+end)
+
+Remotes.Character.CharacterDamaged.Listen(function(payload)
+    if not State.DamageNumbers then return end
+    if not payload or not payload.VictimUserId then return end
+    if payload.VictimUserId == LocalPlayer.UserId then return end
+
+    local victim = Players:GetPlayerByUserId(payload.VictimUserId)
+    if not victim then return end
+
+    local char = victim.Character
+    if not char then return end
+
+    local head = char:FindFirstChild('Head') or char:FindFirstChild('UpperTorso')
+    if not head then return end
+
+    local damage = payload.Damage or payload.Amount or payload.dmg or payload.Value or 0
+    if damage <= 0 then return end
+
+    createDamageNumber(head.Position + Vector3.new(0, 2.5, 0), math.floor(damage + 0.5))
+end)
 
 local Win = Library:Window('spel.script', UDim2.fromOffset(620, 560))
 local Combat = Win:AddTab('Combat')
@@ -1996,6 +2084,14 @@ local MusicDropdown = RegisterSec:AddDropdown('music', {
 end)
 
 MusicDropdown:DependsOn(MusicToggle, true)
+
+local DamageNumSec = RegisterTab:AddSection('Damage Numbers', 'Right')
+local DamageNumToggle = DamageNumSec:AddToggle('damage numbers', false, function(on)
+    State.DamageNumbers = on
+end)
+DamageNumSec:AddColorpicker('color', Color3.fromRGB(255, 255, 0), 1, function(c, a)
+    State.DamageNumberColor = c
+end):DependsOn(DamageNumToggle, true)
 
 local PlayerTab = Misc:AddSubTab('Player')
 local AntiAimSec = PlayerTab:AddSection('Anti-Aim', 'Left')
