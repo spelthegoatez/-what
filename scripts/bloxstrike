@@ -88,6 +88,13 @@ local HITSOUND_IDS = {
     ['cs:go'] = 'rbxassetid://133002449941130',
     ['neverlose'] = 'rbxassetid://139452805868562',
     ['cod'] = 'rbxassetid://77082587278347',
+    ['gamesense'] = 'rbxassetid://140247876667835',
+    ['bell'] = 'rbxassetid://124010691633262',
+    ['bubble'] = 'rbxassetid://104824514322839',
+    ['osu'] = 'rbxassetid://7149964817',
+    ['among us'] = 'rbxassetid://130456049552264',
+    ['minecraft ding'] = 'rbxassetid://135478009117226',
+    ['minecraft'] = 'rbxassetid://103315511081890',
 }
 local hitSoundTemplate = Instance.new('Sound')
 
@@ -1916,6 +1923,13 @@ local HitsoundsDropdown = RegisterSec:AddDropdown('sound', {
     'cs:go',
     'neverlose',
     'cod',
+    'gamesense',
+    'bell',
+    'bubble',
+    'osu',
+    'among us',
+    'minecraft ding',
+    'minecraft',
 }, 'cs:go', function(v)
     State.HitsoundPack = v
 end)
