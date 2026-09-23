@@ -5,7 +5,6 @@ local ReplicatedStorage = game:GetService('ReplicatedStorage')
 local SoundService = game:GetService('SoundService')
 local HttpService = game:GetService('HttpService')
 local Debris = game:GetService('Debris')
-local TweenService = game:GetService('TweenService')
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 local FIRE_RATE = 0.03
@@ -36,7 +35,6 @@ local noSpreadEnabled = false
 local silentAimEnabled = false
 local silentAimFOVVisible = true
 local silentAimFOVRadius = 120
-local silentAimOutlines = true
 local GunRemotes = ReplicatedStorage:WaitForChild('GunRemotes', 10)
 local ShootEvent = GunRemotes and GunRemotes:WaitForChild('ShootEvent', 10)
 local FuncReload = GunRemotes and GunRemotes:WaitForChild('FuncReload', 10)
@@ -193,16 +191,22 @@ local closestHitPart = nil
 local lockedTarget = nil
 local cursorPosition = Vector2.new(0, 0)
 
+local function updateCursor(input)
+    if input and input.Position then
+        cursorPosition = Vector2.new(input.Position.X, input.Position.Y)
+    end
+end
+
 UserInputService.InputChanged:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseMovement then
-        cursorPosition = Vector2.new(input.Position.X, input.Position.Y)
+        updateCursor(input)
     end
 end)
 
 UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        cursorPosition = Vector2.new(input.Position.X, input.Position.Y)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        updateCursor(input)
     end
 end)
 
@@ -214,7 +218,7 @@ local function getSilentAimTarget()
             local hum = player.Character:FindFirstChild('Humanoid')
             if head and hum and hum.Health > 0 then
                 local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                if onScreen then
+                if onScreen and screenPos.Z > 0 then
                     local dist = (Vector2.new(screenPos.X, screenPos.Y) - cursorPosition).Magnitude
                     if dist < silentAimFOVRadius and dist < closestDist then
                         closestDist = dist
@@ -595,7 +599,6 @@ RunService.RenderStepped:Connect(function()
     flyBG.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.LookVector)
 end)
 
--- FOV (new style)
 local fovGui = Instance.new('ScreenGui')
 fovGui.Name = 'SilentAimFOV'
 fovGui.IgnoreGuiInset = true
@@ -603,56 +606,34 @@ fovGui.ResetOnSpawn = false
 fovGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 fovGui.Parent = game:GetService('CoreGui')
 
-local fovFrame = Instance.new('Frame')
-fovFrame.BorderSizePixel = 0
-fovFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-fovFrame.Size = UDim2.new(0, 100, 0, 100)
-fovFrame.Position = UDim2.fromOffset(0, 0)
-fovFrame.BorderColor3 = Color3.fromRGB(0, 0, 0)
-fovFrame.BackgroundTransparency = 1
-fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-fovFrame.Parent = fovGui
+local fovCircle = Instance.new('Frame')
+fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+fovCircle.BackgroundTransparency = 1
+fovCircle.BorderSizePixel = 0
+fovCircle.Parent = fovGui
 
 local fovCorner = Instance.new('UICorner')
 fovCorner.CornerRadius = UDim.new(1, 0)
-fovCorner.Parent = fovFrame
+fovCorner.Parent = fovCircle
 
 local fovStroke = Instance.new('UIStroke')
 fovStroke.Color = Color3.fromRGB(255, 255, 255)
-fovStroke.Name = 'fov'
-fovStroke.BorderStrokePosition = Enum.BorderStrokePosition.Center
-fovStroke.Parent = fovFrame
-
-local outerOutline = Instance.new('UIStroke')
-outerOutline.Name = 'outeroutline'
-outerOutline.Color = Color3.fromRGB(0, 0, 0)
-outerOutline.Thickness = 3
-outerOutline.BorderStrokePosition = Enum.BorderStrokePosition.Outer
-outerOutline.Parent = fovFrame
-
-local innerOutline = Instance.new('UIStroke')
-innerOutline.Name = 'inneroutline'
-innerOutline.Color = Color3.fromRGB(0, 0, 0)
-innerOutline.Thickness = 3
-innerOutline.BorderStrokePosition = Enum.BorderStrokePosition.Inner
-innerOutline.Parent = fovFrame
+fovStroke.Thickness = 1
+fovStroke.Transparency = 0.3
+fovStroke.Parent = fovCircle
 
 local function updateFOVCircle()
     local size = silentAimFOVRadius * 2
-    fovFrame.Size = UDim2.fromOffset(size, size)
-    fovFrame.Visible = silentAimFOVVisible and silentAimEnabled
-    outerOutline.Enabled = silentAimOutlines and silentAimFOVVisible and silentAimEnabled
-    innerOutline.Enabled = silentAimOutlines and silentAimFOVVisible and silentAimEnabled
+    fovCircle.Size = UDim2.fromOffset(size, size)
+    fovCircle.Visible = silentAimFOVVisible and silentAimEnabled
 end
 
 updateFOVCircle()
 
 RunService.RenderStepped:Connect(function()
-    if silentAimEnabled and silentAimFOVVisible then
-        local mouse = UserInputService:GetMouseLocation()
-        local inset = game:GetService('GuiService'):GetGuiInset()
-        fovFrame.Position = UDim2.fromOffset(mouse.X, mouse.Y)
-    end
+    if not silentAimEnabled or not silentAimFOVVisible then return end
+    local mouse = UserInputService:GetMouseLocation()
+    fovCircle.Position = UDim2.fromOffset(mouse.X, mouse.Y)
 end)
 
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/ergthhejasert-wq/uilib/refs/heads/main/library.lua'))()
@@ -717,13 +698,6 @@ end)
 
 GunR:AddToggle('fov visible', silentAimFOVVisible, function(on)
     silentAimFOVVisible = on
-    updateFOVCircle()
-end):DependsOn(SilentAimToggle, true)
-
-local FovVisibleToggle = nil
-
-GunR:AddToggle('outlines', silentAimOutlines, function(on)
-    silentAimOutlines = on
     updateFOVCircle()
 end):DependsOn(SilentAimToggle, true)
 
@@ -1021,26 +995,35 @@ end)
 if LocalPlayer.Character then task.spawn(autoGrabWeapon) end
 
 local oldNamecall
-oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...)
+oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...))
     local method = getnamecallmethod()
     local self = ...
     if method == 'Sit' and typeof(self) == 'Instance' and self:IsA('Seat') then
         return nil
     end
     if method == 'Raycast' and self == workspace and not checkcaller() then
-        if rageEnabled or silentAimEnabled then
-            local target
-            if silentAimEnabled then
-                target = getSilentAimTarget()
-            end
-            if not target and rageEnabled then
-                target = closestHitPart
-            end
-            if target and target.Parent then
-                local args = {...}
-                local origin = args[2]
-                args[3] = (target.Position - origin).Unit * 1000
-                return oldNamecall(unpack(args))
+        if silentAimEnabled or rageEnabled then
+            local args = {...}
+            local rp = args[4]
+            local isBulletRay = typeof(rp) == 'RaycastParams'
+                and rp.CollisionGroup == 'ClientBullet'
+                or (typeof(rp) == 'RaycastParams'
+                    and typeof(rp.FilterDescendantsInstances) == 'table'
+                    and #rp.FilterDescendantsInstances == 2)
+
+            if isBulletRay then
+                local target
+                if silentAimEnabled then
+                    target = getSilentAimTarget()
+                end
+                if not target and rageEnabled then
+                    target = closestHitPart
+                end
+                if target and target.Parent then
+                    local origin = args[2]
+                    args[3] = (target.Position - origin).Unit * 1000
+                    return oldNamecall(unpack(args))
+                end
             end
         end
     end
