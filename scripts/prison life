@@ -36,6 +36,7 @@ local noSpreadEnabled = false
 local silentAimEnabled = false
 local silentAimFOVVisible = true
 local silentAimFOVRadius = 120
+local silentAimOutlines = true
 local GunRemotes = ReplicatedStorage:WaitForChild('GunRemotes', 10)
 local ShootEvent = GunRemotes and GunRemotes:WaitForChild('ShootEvent', 10)
 local FuncReload = GunRemotes and GunRemotes:WaitForChild('FuncReload', 10)
@@ -44,9 +45,7 @@ local GiverPressed = Remotes and Remotes:WaitForChild('GiverPressed', 10)
 local BulletsLabel = nil
 
 local function getEffectiveFireRate()
-    if not rapidFireEnabled then
-        return FIRE_RATE
-    end
+    if not rapidFireEnabled then return FIRE_RATE end
     return 0.001 + (FIRE_RATE - 0.001) * (rapidFirePercent / 100)
 end
 
@@ -192,6 +191,41 @@ end)
 
 local closestHitPart = nil
 local lockedTarget = nil
+local cursorPosition = Vector2.new(0, 0)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        cursorPosition = Vector2.new(input.Position.X, input.Position.Y)
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        cursorPosition = Vector2.new(input.Position.X, input.Position.Y)
+    end
+end)
+
+local function getSilentAimTarget()
+    local closestPart, closestDist = nil, math.huge
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and not isSameTeam(player) then
+            local head = player.Character:FindFirstChild('Head')
+            local hum = player.Character:FindFirstChild('Humanoid')
+            if head and hum and hum.Health > 0 then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - cursorPosition).Magnitude
+                    if dist < silentAimFOVRadius and dist < closestDist then
+                        closestDist = dist
+                        closestPart = head
+                    end
+                end
+            end
+        end
+    end
+    return closestPart
+end
 
 local function getClosestEnemy()
     local closestPart, closestDistance = nil, math.huge
@@ -256,18 +290,14 @@ local Originals = {
 
 local function applyNoRecoil(tool)
     if not tool then return end
-
     if not Originals.toolAttrs[tool] then
         local saved = {}
         for _, name in ipairs(RECOIL_ATTRS) do
             local v = tool:GetAttribute(name)
-            if v ~= nil then
-                saved[name] = v
-            end
+            if v ~= nil then saved[name] = v end
         end
         Originals.toolAttrs[tool] = saved
     end
-
     if noRecoilEnabled then
         for _, name in ipairs(RECOIL_ATTRS) do
             pcall(function() tool:SetAttribute(name, 0) end)
@@ -286,8 +316,10 @@ local function patchTool(tool)
     if typeof(tool) ~= 'Instance' or not tool:IsA('Tool') then return end
     if tool:GetAttribute('ToolType') ~= 'Gun' then return end
 
-    tool:SetAttribute('FireRate', getEffectiveFireRate())
-    tool:SetAttribute('AutoFire', true)
+    if rapidFireEnabled then
+        tool:SetAttribute('FireRate', getEffectiveFireRate())
+        tool:SetAttribute('AutoFire', true)
+    end
 
     if noSpreadEnabled then
         tool:SetAttribute('SpreadRadius', 0)
@@ -323,7 +355,6 @@ end
 
 if LocalPlayer:FindFirstChild('Backpack') then watch(LocalPlayer.Backpack) end
 if LocalPlayer.Character then watch(LocalPlayer.Character) end
-
 LocalPlayer.ChildAdded:Connect(function(c)
     if c.Name == 'Backpack' then watch(c) end
 end)
@@ -564,6 +595,7 @@ RunService.RenderStepped:Connect(function()
     flyBG.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.LookVector)
 end)
 
+-- FOV (new style)
 local fovGui = Instance.new('ScreenGui')
 fovGui.Name = 'SilentAimFOV'
 fovGui.IgnoreGuiInset = true
@@ -571,30 +603,57 @@ fovGui.ResetOnSpawn = false
 fovGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 fovGui.Parent = game:GetService('CoreGui')
 
-local fovCircle = Instance.new('Frame')
-fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
-fovCircle.Position = UDim2.fromScale(0.5, 0.5)
-fovCircle.BackgroundTransparency = 1
-fovCircle.BorderSizePixel = 0
-fovCircle.Parent = fovGui
+local fovFrame = Instance.new('Frame')
+fovFrame.BorderSizePixel = 0
+fovFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+fovFrame.Size = UDim2.new(0, 100, 0, 100)
+fovFrame.Position = UDim2.fromOffset(0, 0)
+fovFrame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+fovFrame.BackgroundTransparency = 1
+fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovFrame.Parent = fovGui
 
 local fovCorner = Instance.new('UICorner')
 fovCorner.CornerRadius = UDim.new(1, 0)
-fovCorner.Parent = fovCircle
+fovCorner.Parent = fovFrame
 
 local fovStroke = Instance.new('UIStroke')
 fovStroke.Color = Color3.fromRGB(255, 255, 255)
-fovStroke.Thickness = 1
-fovStroke.Transparency = 0.3
-fovStroke.Parent = fovCircle
+fovStroke.Name = 'fov'
+fovStroke.BorderStrokePosition = Enum.BorderStrokePosition.Center
+fovStroke.Parent = fovFrame
+
+local outerOutline = Instance.new('UIStroke')
+outerOutline.Name = 'outeroutline'
+outerOutline.Color = Color3.fromRGB(0, 0, 0)
+outerOutline.Thickness = 3
+outerOutline.BorderStrokePosition = Enum.BorderStrokePosition.Outer
+outerOutline.Parent = fovFrame
+
+local innerOutline = Instance.new('UIStroke')
+innerOutline.Name = 'inneroutline'
+innerOutline.Color = Color3.fromRGB(0, 0, 0)
+innerOutline.Thickness = 3
+innerOutline.BorderStrokePosition = Enum.BorderStrokePosition.Inner
+innerOutline.Parent = fovFrame
 
 local function updateFOVCircle()
     local size = silentAimFOVRadius * 2
-    fovCircle.Size = UDim2.fromOffset(size, size)
-    fovCircle.Visible = silentAimFOVVisible and silentAimEnabled
+    fovFrame.Size = UDim2.fromOffset(size, size)
+    fovFrame.Visible = silentAimFOVVisible and silentAimEnabled
+    outerOutline.Enabled = silentAimOutlines and silentAimFOVVisible and silentAimEnabled
+    innerOutline.Enabled = silentAimOutlines and silentAimFOVVisible and silentAimEnabled
 end
 
 updateFOVCircle()
+
+RunService.RenderStepped:Connect(function()
+    if silentAimEnabled and silentAimFOVVisible then
+        local mouse = UserInputService:GetMouseLocation()
+        local inset = game:GetService('GuiService'):GetGuiInset()
+        fovFrame.Position = UDim2.fromOffset(mouse.X, mouse.Y)
+    end
+end)
 
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/ergthhejasert-wq/uilib/refs/heads/main/library.lua'))()
 
@@ -658,6 +717,13 @@ end)
 
 GunR:AddToggle('fov visible', silentAimFOVVisible, function(on)
     silentAimFOVVisible = on
+    updateFOVCircle()
+end):DependsOn(SilentAimToggle, true)
+
+local FovVisibleToggle = nil
+
+GunR:AddToggle('outlines', silentAimOutlines, function(on)
+    silentAimOutlines = on
     updateFOVCircle()
 end):DependsOn(SilentAimToggle, true)
 
@@ -964,44 +1030,30 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...)
     if method == 'Raycast' and self == workspace and not checkcaller() then
         if rageEnabled or silentAimEnabled then
             local target
-            if rageEnabled then
-                target = closestHitPart
-            else
+            if silentAimEnabled then
+                target = getSilentAimTarget()
+            end
+            if not target and rageEnabled then
                 target = closestHitPart
             end
             if target and target.Parent then
-                if silentAimEnabled then
-                    local head = target.Parent:FindFirstChild('Head')
-                    if head then
-                        local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                        if onScreen then
-                            local center = Camera.ViewportSize * 0.5
-                            local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-                            if dist > silentAimFOVRadius then
-                                target = nil
-                            end
-                        else
-                            target = nil
-                        end
-                    else
-                        target = nil
-                    end
-                end
-                if target and target.Parent then
-                    local args = {...}
-                    local origin = args[2]
-                    args[3] = (target.Position - origin).Unit * 1000
-                    return oldNamecall(unpack(args))
-                end
+                local args = {...}
+                local origin = args[2]
+                args[3] = (target.Position - origin).Unit * 1000
+                return oldNamecall(unpack(args))
             end
         end
     end
     if method == 'GetAttributes' then
         local attrs = oldNamecall(...)
         if typeof(attrs) == 'table' and typeof(self) == 'Instance' and self:IsA('Tool') and self:GetAttribute('ToolType') == 'Gun' then
-            attrs.FireRate = getEffectiveFireRate()
-            attrs.AutoFire = true
-            if noSpreadEnabled then attrs.SpreadRadius = 0 end
+            if rapidFireEnabled then
+                attrs.FireRate = getEffectiveFireRate()
+                attrs.AutoFire = true
+            end
+            if noSpreadEnabled then
+                attrs.SpreadRadius = 0
+            end
             if noRecoilEnabled then
                 for _, name in ipairs(RECOIL_ATTRS) do
                     if attrs[name] ~= nil then
