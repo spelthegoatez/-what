@@ -1,0 +1,365 @@
+local library = 'https://raw.githubusercontent.com/ergthhejasert-wq/uilib/refs/heads/main/library.lua'
+local Library = loadstring(game:HttpGet(library))()
+
+if not Library then
+    error('ui failed to load.', 0)
+end
+
+local Players = game:GetService('Players')
+local RunService = game:GetService('RunService')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+
+local LocalPlayer = Players.LocalPlayer
+
+local State = {
+    AutoTap = false,
+    TapRange = 50,
+    WalkSpeedEnabled = false,
+    WalkSpeed = 16,
+    Noclip = false,
+    AutoBuyZone = false,
+}
+
+local tapRemote
+do
+    local ok, result = pcall(function()
+        return ReplicatedStorage.Network.Breakables_PlayerDealDamage
+    end)
+    if ok then tapRemote = result end
+end
+
+local zonePurchaseRemote
+do
+    local ok, result = pcall(function()
+        return ReplicatedStorage.Network.Zones_RequestPurchase
+    end)
+    if ok then zonePurchaseRemote = result end
+end
+
+local breakablesFolder
+do
+    local ok, result = pcall(function()
+        return workspace.__THINGS.Breakables
+    end)
+    if ok then breakablesFolder = result end
+end
+
+local function getLocalPos()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local hrp = char:FindFirstChild('HumanoidRootPart') or char.PrimaryPart
+    return hrp and hrp.Position or nil
+end
+
+local function getObjectPos(obj)
+    if obj:IsA('Model') then
+        local primary = obj.PrimaryPart or obj:FindFirstChildWhichIsA('BasePart', true)
+        return primary and primary.Position
+    elseif obj:IsA('BasePart') then
+        return obj.Position
+    end
+    return nil
+end
+
+local function getClosestBreakable(radius)
+    if not breakablesFolder then return nil end
+    local myPos = getLocalPos()
+    if not myPos then return nil end
+
+    local best, bestDist
+    for _, model in ipairs(breakablesFolder:GetChildren()) do
+        local name = model.Name
+        if name and name:match('^%d+$') then
+            local pos = getObjectPos(model)
+            if pos then
+                local dist = (pos - myPos).Magnitude
+                if dist <= radius and (not bestDist or dist < bestDist) then
+                    bestDist = dist
+                    best = name
+                end
+            end
+        end
+    end
+    return best
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if State.AutoTap and tapRemote then
+            local id = getClosestBreakable(State.TapRange)
+            if id then
+                pcall(function()
+                    tapRemote:FireServer(id)
+                end)
+            end
+        end
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    if not State.WalkSpeedEnabled then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass('Humanoid')
+    if hum and hum.WalkSpeed ~= State.WalkSpeed then
+        hum.WalkSpeed = State.WalkSpeed
+    end
+end)
+
+local originalCollides = {}
+local noclipConnection = nil
+
+local function enforceNoclip()
+    local char = LocalPlayer.Character
+    if not char or not char.Parent then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA('BasePart') then
+            if originalCollides[part] == nil then
+                originalCollides[part] = part.CanCollide
+            end
+            part.CanCollide = false
+        end
+    end
+end
+
+local function enableNoclip()
+    if noclipConnection then return end
+    originalCollides = {}
+    enforceNoclip()
+
+    noclipConnection = RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA('BasePart') and part.CanCollide then
+                if originalCollides[part] == nil then
+                    originalCollides[part] = true
+                end
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function disableNoclip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    for part, val in pairs(originalCollides) do
+        if part and part.Parent and part:IsA('BasePart') then
+            pcall(function()
+                part.CanCollide = val
+            end)
+        end
+    end
+    originalCollides = {}
+end
+
+local function getZoneList()
+    local mapFolder = workspace:FindFirstChild('Map')
+    if not mapFolder then return {} end
+
+    local zones = {}
+    for _, obj in ipairs(mapFolder:GetChildren()) do
+        if obj:IsA('Folder') and obj.Name ~= 'SHOP' then
+            local num, cleanName = obj.Name:match('^(%d+)%s*|%s*(.+)$')
+            if num and cleanName then
+                table.insert(zones, {
+                    num = tonumber(num),
+                    name = cleanName,
+                })
+            end
+        end
+    end
+
+    table.sort(zones, function(a, b)
+        return a.num < b.num
+    end)
+
+    return zones
+end
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if State.AutoBuyZone and zonePurchaseRemote then
+            local zones = getZoneList()
+            for _, zone in ipairs(zones) do
+                pcall(function()
+                    zonePurchaseRemote:InvokeServer(zone.name)
+                end)
+            end
+        end
+    end
+end)
+
+local Win = Library:Window('spel.script', UDim2.fromOffset(620, 560))
+
+local MainTab = Win:AddTab('Main')
+local BreakSec = MainTab:AddSection('Breakables', 'Left')
+
+local AutoTapToggle = BreakSec:AddToggle('auto tap', false, function(on)
+    State.AutoTap = on
+end)
+
+BreakSec:AddSlider('tap range', 5, 200, State.TapRange, function(v)
+    State.TapRange = v
+end):DependsOn(AutoTapToggle, true)
+
+local ZoneSec = MainTab:AddSection('Zones', 'Right')
+
+ZoneSec:AddToggle('auto buy zone', false, function(on)
+    State.AutoBuyZone = on
+end)
+
+local MiscTab = Win:AddTab('Misc')
+local PlayerSec = MiscTab:AddSection('Player', 'Left')
+
+local WalkSpeedToggle = PlayerSec:AddToggle('walkspeed', false, function(on)
+    State.WalkSpeedEnabled = on
+    if not on then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass('Humanoid')
+        if hum then
+            hum.WalkSpeed = 16
+        end
+    end
+end)
+
+PlayerSec:AddSlider('speed', 1, 200, State.WalkSpeed, function(v)
+    State.WalkSpeed = v
+end):DependsOn(WalkSpeedToggle, true)
+
+PlayerSec:AddToggle('noclip', false, function(on)
+    State.Noclip = on
+    if on then
+        enableNoclip()
+    else
+        disableNoclip()
+    end
+end)
+
+local PlayersTab = Win:AddTab('Players')
+local Filters = PlayersTab:AddSection('Filters', 'Left')
+
+Filters:AddToggle('team check', false)
+Filters:AddDropdown('sort by', { 'Name', 'Distance', 'Team' }, 'Name', function(v) end)
+Filters:AddToggle('show hidden', false)
+Filters:AddToggle('highlight target', true)
+PlayersTab:PlayerList()
+
+local Settings = Win:AddTab('Settings')
+local AppSec = Settings:AddSection('Appearance', 'Left')
+
+local ThemeNames = {}
+for _, T in Library.AppearanceThemes do
+    ThemeNames[#ThemeNames + 1] = T.Name
+end
+
+AppSec:AddDropdown('theme', ThemeNames, 'Default', function(name)
+    Library:ApplyTheme(name)
+end)
+AppSec:AddColorpicker('accent',        Library.Palette.Default.Accent,       1, function(c) Library:AppApplyAccent(c) end)
+AppSec:AddColorpicker('background',    Library.Palette.Default.Top,          1, function(c) Library:AppApplyBackTop(c) end)
+AppSec:AddColorpicker('lowlight',      Library.Palette.Default.Bottom,       1, function(c) Library:AppApplyBackBottom(c) end)
+AppSec:AddColorpicker('outline',       Library.Palette.Default.Outline,      1, function(c) Library:AppApplyOutline(c) end)
+AppSec:AddColorpicker('inner outline', Library.Palette.Default.InnerOutline, 1, function(c) Library:AppApplyInnerOutline(c) end)
+AppSec:AddColorpicker('title color',   Library.Palette.Default.TitleBottom,  1, function(c) Library:AppApplyTitleColor(c) end)
+AppSec:AddColorpicker('shadow color',  Library.Palette.Default.Shadow,       1, function(c) Library:AppApplyShadow(c) end)
+AppSec:AddSlider('shadow size',   0,  40, Library.Palette.Default.ShadowSize,   function(v) Library:AppApplyShadowSize(v) end)
+AppSec:AddSlider('shadow offset', -20, 20, Library.Palette.Default.ShadowOffset, function(v) Library:AppApplyShadowOffset(v) end)
+
+local OverlaySec = Settings:AddSection('Overlay', 'Left')
+
+local MenuToggle = OverlaySec:AddToggle('menu', true, function(v)
+    if Win.Gui then Library:FadeGui(Win.Gui, v) end
+    if Library.SyncBlur then Library:SyncBlur() end
+end)
+
+MenuToggle:AddKeybind(Enum.KeyCode.RightShift, { Mode = 'Toggle' })
+OverlaySec:AddToggle('menu blur', false, function(v)
+    Library._MenuBlurOn = v
+    if Library.SyncBlur then Library:SyncBlur() end
+end)
+OverlaySec:AddToggle('watermark', true, function(v)
+    if Library.WatermarkState then Library.WatermarkState:SetVisible(v) end
+end)
+OverlaySec:AddToggle('keybind list', true, function(v)
+    if Library.KeybindListState then Library.KeybindListState:SetVisible(v) end
+end)
+OverlaySec:AddToggle('anonymous', false, function(v)
+    Library:AppApplyAnonymous(v)
+end)
+
+local CfgSec = Settings:AddSection('Configs', 'Right')
+local CfgName = CfgSec:AddTextbox('config name', '', 'config name...')
+local CfgList = CfgSec:AddList('saved', Library:ListConfigs(), {
+    Height = 96,
+    Callback = function(v)
+        if v and v ~= '' then CfgName:Set(v) end
+    end,
+})
+
+local function CfgCurrent()
+    return (CfgName:Get():gsub('^%s+', ''):gsub('%s+$', ''))
+end
+
+local function CfgWrite(Name)
+    if typeof(writefile) ~= 'function' then return end
+    Library:EnsureConfigsFolder()
+    local Json = Library:GetConfig()
+    writefile(Library:ConfigPath(Name), (typeof(Json) == 'string') and Json or '{}')
+    CfgList:Refresh(Library:ListConfigs())
+end
+
+CfgSec:AddButton('create', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    CfgWrite(Name)
+end):AddButton('save', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    CfgWrite(Name)
+end)
+
+CfgSec:AddButton('load', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    if typeof(readfile) ~= 'function' then return end
+    local Path = Library:ConfigPath(Name)
+    if typeof(isfile) == 'function' and not isfile(Path) then return end
+    local Data = readfile(Path)
+    if typeof(Data) == 'string' then Library:LoadConfig(Data) end
+end):AddButton('delete', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    if typeof(delfile) ~= 'function' then return end
+    local Path = Library:ConfigPath(Name)
+    if typeof(isfile) == 'function' and not isfile(Path) then return end
+    delfile(Path)
+    CfgList:Refresh(Library:ListConfigs())
+end)
+
+local Watermark = Library:Watermark({
+    Segments = { 'spel.script', LocalPlayer.Name, '0 fps' },
+})
+
+Library:KeybindList({ Title = 'keybinds' })
+
+task.spawn(function()
+    local Acc, Frames = 0, 0
+    while Watermark and Watermark.Gui and Watermark.Gui.Parent do
+        local Dt = RunService.RenderStepped:Wait()
+        Acc = Acc + Dt
+        Frames = Frames + 1
+        if Acc >= 0.25 then
+            Watermark:SetSegment(3, tostring(math.floor(Frames / Acc + 0.5)) .. ' fps')
+            Acc = 0
+            Frames = 0
+        end
+    end
+end)
+
+return Library
