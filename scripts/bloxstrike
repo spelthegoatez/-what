@@ -61,7 +61,8 @@ local State = {
     RageTarget = nil,
     Wallbang = false,
     Hitsounds = false,
-    HitsoundPack = 'cs:go',
+    HeadHitsoundPack = 'cs:go',
+    BodyHitsoundPack = 'cs:go',
     RemoveGameHit = false,
     Spinbot = false,
     SpinbotSpeed = 360,
@@ -130,8 +131,8 @@ local function updateMusic()
     end
 end
 
-local function playHitsound()
-    local id = HITSOUND_IDS[State.HitsoundPack]
+local function playHitsound(pack)
+    local id = HITSOUND_IDS[pack]
     if not id then return end
     local s = hitSoundTemplate:Clone()
     s.SoundId = id
@@ -206,6 +207,35 @@ local function partIsEnemy(inst)
     if model:GetAttribute('Dead') == true then return false end
     if (model:GetAttribute('Health') or 0) <= 0 then return false end
     return true
+end
+
+local function isHeadHit(inst)
+    if not inst then return false end
+    if inst.Name == 'Head' then return true end
+    local parent = inst.Parent
+    while parent and parent ~= workspace do
+        if parent.Name == 'Head' then return true end
+        if parent:IsA('Accessory') or parent:IsA('Hat') then
+            local accHandle = parent:FindFirstChild('Handle')
+            if accHandle and inst == accHandle then return true end
+            if accHandle then
+                local model = parent.Parent
+                if model and model:FindFirstChild('Head') then
+                    -- accessory parented to the character; check whether its attachment is on the head
+                    local head = model:FindFirstChild('Head')
+                    if head then
+                        for _, att in ipairs(parent:GetDescendants()) do
+                            if att:IsA('Attachment') and att.Parent and att.Parent:IsDescendantOf(head) then
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        parent = parent.Parent
+    end
+    return false
 end
 
 local HIT_SOUND_KEYS = {
@@ -773,7 +803,8 @@ Bullet._performRaycast = function(Self, Spread)
     if State.Hitsounds and Result.Hits then
         for _, hit in ipairs(Result.Hits) do
             if partIsEnemy(hit.Instance) then
-                playHitsound()
+                local head = isHeadHit(hit.Instance)
+                playHitsound(head and State.HeadHitsoundPack or State.BodyHitsoundPack)
                 break
             end
         end
@@ -1299,11 +1330,21 @@ local Misc = Win:AddTab('Misc')
 local RegisterTab = Misc:AddSubTab('Register')
 local RegisterSec = RegisterTab:AddSection('Sounds', 'Left')
 local HitsoundsToggle = RegisterSec:AddToggle('hitsounds', false, function(on) State.Hitsounds = on end)
-local HitsoundsDropdown = RegisterSec:AddDropdown('sound', {
+
+local HITSOUND_OPTIONS = {
     'cs:go', 'neverlose', 'cod', 'gamesense', 'bell',
     'bubble', 'osu', 'among us', 'minecraft ding', 'minecraft',
-}, 'cs:go', function(v) State.HitsoundPack = v end)
-HitsoundsDropdown:DependsOn(HitsoundsToggle, true)
+}
+
+local HeadHitsoundDropdown = RegisterSec:AddDropdown('head sound', HITSOUND_OPTIONS, 'cs:go', function(v)
+    State.HeadHitsoundPack = v
+end)
+HeadHitsoundDropdown:DependsOn(HitsoundsToggle, true)
+
+local BodyHitsoundDropdown = RegisterSec:AddDropdown('body sound', HITSOUND_OPTIONS, 'cs:go', function(v)
+    State.BodyHitsoundPack = v
+end)
+BodyHitsoundDropdown:DependsOn(HitsoundsToggle, true)
 
 local RemoveGameHitToggle = RegisterSec:AddToggle('remove game hit', false, function(on) State.RemoveGameHit = on end, { Tooltip = "mutes the game's built-in hitmarker sounds" })
 RemoveGameHitToggle:DependsOn(HitsoundsToggle, true)
