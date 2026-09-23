@@ -7,6 +7,7 @@ local HttpService = game:GetService('HttpService')
 local Debris = game:GetService('Debris')
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
+
 local FIRE_RATE = 0.03
 local TARGET_TEAM_NAME = 'Criminals'
 local FLY_SPEED = 100
@@ -22,6 +23,7 @@ local HIT_WINDOW = 0.5
 local DMG_NUMBER_COLOR = Color3.fromRGB(255, 255, 0)
 local DMG_DURATION = 1
 local DMG_RISE_SPEED = 6
+
 local rageEnabled = false
 local flyEnabled = false
 local orbitEnabled = false
@@ -32,14 +34,18 @@ local rapidFireEnabled = false
 local rapidFirePercent = 100
 local noRecoilEnabled = false
 local noSpreadEnabled = false
-local silentAimEnabled = false
-local silentAimFOVVisible = true
-local silentAimFOVRadius = 120
+
+local meleeKillauraEnabled = false
+local MELEE_RANGE = 14
+local MELEE_HIT_RATE = 0.12
+local MELEE_MAX_TARGETS = 1
+
 local GunRemotes = ReplicatedStorage:WaitForChild('GunRemotes', 10)
 local ShootEvent = GunRemotes and GunRemotes:WaitForChild('ShootEvent', 10)
 local FuncReload = GunRemotes and GunRemotes:WaitForChild('FuncReload', 10)
 local Remotes = ReplicatedStorage:WaitForChild('Remotes', 10)
 local GiverPressed = Remotes and Remotes:WaitForChild('GiverPressed', 10)
+local meleeEvent = ReplicatedStorage:WaitForChild('meleeEvent', 10)
 local BulletsLabel = nil
 
 local function getEffectiveFireRate()
@@ -81,7 +87,9 @@ do
             end
             local Data = {
                 Name = Name,
-                Faces = {{Name = 'Regular', Weight = 200, Style = 'Regular', AssetId = getcustomasset(Fonts.Folder .. '/' .. FileName[1])}},
+                Faces = {
+                    {Name = 'Regular', Weight = 200, Style = 'Regular', AssetId = getcustomasset(Fonts.Folder .. '/' .. FileName[1])},
+                },
             }
             if not isfile(Fonts.Folder .. '/' .. FileName[2]) then
                 writefile(Fonts.Folder .. '/' .. FileName[2], HttpSvc:JSONEncode(Data))
@@ -104,18 +112,11 @@ local function isSameTeam(player)
     return LocalPlayer.Team == player.Team
 end
 
-local function isVisibleFromCamera(targetPart)
-    local character = LocalPlayer.Character
-    if not character then return false end
-    local origin = Camera.CFrame.Position
-    local direction = targetPart.Position - origin
-    local rp = RaycastParams.new()
-    rp.FilterType = Enum.RaycastFilterType.Exclude
-    rp.FilterDescendantsInstances = {character, Camera}
-    rp.IgnoreWater = true
-    local result = workspace:Raycast(origin, direction, rp)
-    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
-    return true
+local function isCriminal(player)
+    if not player then return false end
+    local team = player.Team
+    if not team then return false end
+    return team.Name == TARGET_TEAM_NAME
 end
 
 local function hasLineOfSight(targetPart)
@@ -130,15 +131,10 @@ local function hasLineOfSight(targetPart)
     rp.FilterDescendantsInstances = {character, Camera}
     rp.IgnoreWater = true
     local result = workspace:Raycast(origin, direction, rp)
-    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
     return true
-end
-
-local function isCriminal(player)
-    if not player then return false end
-    local team = player.Team
-    if not team then return end
-    return team.Name == TARGET_TEAM_NAME
 end
 
 local function isInVehicle(humanoid)
@@ -147,18 +143,14 @@ local function isInVehicle(humanoid)
 end
 
 task.spawn(function()
-    while task.wait(0.1) do
+    while task.wait(0.5) do
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass('Humanoid')
-        if hum then
-            pcall(function() hum.Sit = false end)
-            if hum.SeatPart then
-                pcall(function()
-                    hum.Sit = false
-                    hum.SeatPart = nil
-                    hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-                end)
-            end
+        if hum and hum.SeatPart then
+            pcall(function()
+                hum.Sit = false
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
         end
     end
 end)
@@ -187,68 +179,7 @@ task.spawn(function()
     end)
 end)
 
-local closestHitPart = nil
 local lockedTarget = nil
-local cursorPosition = Vector2.new(0, 0)
-
-local function updateCursor(input)
-    if input and input.Position then
-        cursorPosition = Vector2.new(input.Position.X, input.Position.Y)
-    end
-end
-
-UserInputService.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        updateCursor(input)
-    end
-end)
-
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        updateCursor(input)
-    end
-end)
-
-local function getSilentAimTarget()
-    local closestPart, closestDist = nil, math.huge
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and not isSameTeam(player) then
-            local head = player.Character:FindFirstChild('Head')
-            local hum = player.Character:FindFirstChild('Humanoid')
-            if head and hum and hum.Health > 0 then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                if onScreen and screenPos.Z > 0 then
-                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - cursorPosition).Magnitude
-                    if dist < silentAimFOVRadius and dist < closestDist then
-                        closestDist = dist
-                        closestPart = head
-                    end
-                end
-            end
-        end
-    end
-    return closestPart
-end
-
-local function getClosestEnemy()
-    local closestPart, closestDistance = nil, math.huge
-    local myPos = Camera.CFrame.Position
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and not isSameTeam(player) then
-            local hrp = player.Character:FindFirstChild('HumanoidRootPart')
-            local hum = player.Character:FindFirstChild('Humanoid')
-            if hrp and hum and hum.Health > 0 then
-                local distance = (hrp.Position - myPos).Magnitude
-                if distance < closestDistance and isVisibleFromCamera(hrp) then
-                    closestDistance = distance
-                    closestPart = hrp
-                end
-            end
-        end
-    end
-    return closestPart
-end
 
 local function getClosestCriminalNoWall()
     local closestPart, closestDistance = nil, math.huge
@@ -278,19 +209,13 @@ local function getLockedTarget()
     return lockedTarget
 end
 
-RunService.Heartbeat:Connect(function()
-    closestHitPart = getClosestEnemy()
-end)
-
 local RECOIL_ATTRS = {
     'Recoil', 'RecoilAmount', 'RecoilMultiplier', 'RecoilScale',
     'CameraRecoil', 'WeaponRecoil', 'GunRecoil', 'VerticalRecoil',
     'HorizontalRecoil', 'RecoilKick', 'Kickback',
 }
 
-local Originals = {
-    toolAttrs = setmetatable({}, {__mode = 'k'}),
-}
+local Originals = { toolAttrs = setmetatable({}, {__mode = 'k'}) }
 
 local function applyNoRecoil(tool)
     if not tool then return end
@@ -319,16 +244,11 @@ end
 local function patchTool(tool)
     if typeof(tool) ~= 'Instance' or not tool:IsA('Tool') then return end
     if tool:GetAttribute('ToolType') ~= 'Gun' then return end
-
     if rapidFireEnabled then
         tool:SetAttribute('FireRate', getEffectiveFireRate())
         tool:SetAttribute('AutoFire', true)
     end
-
-    if noSpreadEnabled then
-        tool:SetAttribute('SpreadRadius', 0)
-    end
-
+    if noSpreadEnabled then tool:SetAttribute('SpreadRadius', 0) end
     applyNoRecoil(tool)
 end
 
@@ -372,18 +292,15 @@ local activeTracers = {}
 
 local function createTracer(fromPos, toPos)
     if not tracersEnabled then return end
-    local line = Drawing.new('Line')
-    line.Visible = false
-    line.Color = Color3.new(1, 1, 1)
-    line.Thickness = 1.5
-    line.Transparency = 0
-    line.ZIndex = 9999
-    table.insert(activeTracers, {
-        line = line,
-        from = fromPos,
-        to = toPos,
-        startTime = tick(),
-    })
+    pcall(function()
+        local line = Drawing.new('Line')
+        line.Visible = false
+        line.Color = Color3.new(1, 1, 1)
+        line.Thickness = 1.5
+        line.Transparency = 0
+        line.ZIndex = 9999
+        table.insert(activeTracers, { line = line, from = fromPos, to = toPos, startTime = tick() })
+    end)
 end
 
 RunService.RenderStepped:Connect(function()
@@ -393,13 +310,17 @@ RunService.RenderStepped:Connect(function()
         local age = now - t.startTime
         local total = TRACER_FADE_IN + TRACER_HOLD + TRACER_FADE_OUT
         if age >= total then
-            t.line:Remove()
+            pcall(function() t.line:Remove() end)
             table.remove(activeTracers, i)
         else
             local alpha
-            if age < TRACER_FADE_IN then alpha = age / TRACER_FADE_IN
-            elseif age < TRACER_FADE_IN + TRACER_HOLD then alpha = 1
-            else alpha = 1 - ((age - TRACER_FADE_IN - TRACER_HOLD) / TRACER_FADE_OUT) end
+            if age < TRACER_FADE_IN then
+                alpha = age / TRACER_FADE_IN
+            elseif age < TRACER_FADE_IN + TRACER_HOLD then
+                alpha = 1
+            else
+                alpha = 1 - ((age - TRACER_FADE_IN - TRACER_HOLD) / TRACER_FADE_OUT)
+            end
             local fromScreen, fromOn = Camera:WorldToViewportPoint(t.from)
             local toScreen, toOn = Camera:WorldToViewportPoint(t.to)
             if fromOn and toOn and fromScreen.Z > 0 and toScreen.Z > 0 then
@@ -418,53 +339,58 @@ local activeWatchers = {}
 
 local function playHitSound()
     if not hitsoundEnabled then return end
-    local s = Instance.new('Sound')
-    s.SoundId = HITSOUND_ID
-    s.Volume = HITSOUND_VOLUME
-    s.Parent = SoundService
-    s:Play()
-    Debris:AddItem(s, 2)
+    pcall(function()
+        local s = Instance.new('Sound')
+        s.SoundId = HITSOUND_ID
+        s.Volume = HITSOUND_VOLUME
+        s.Parent = SoundService
+        s:Play()
+        Debris:AddItem(s, 2)
+    end)
 end
 
 local function createDamageNumber(worldPos, damage)
     if not dmgNumbersEnabled then return end
-    local part = Instance.new('Part')
-    part.Anchored = true
-    part.CanCollide = false
-    part.CanQuery = false
-    part.CanTouch = false
-    part.Transparency = 1
-    part.Size = Vector3.new(0.1, 0.1, 0.1)
-    part.CFrame = CFrame.new(worldPos)
-    part.Name = 'DmgNumber'
-    part.Parent = workspace
-    local billboard = Instance.new('BillboardGui')
-    billboard.Size = UDim2.fromOffset(140, 70)
-    billboard.AlwaysOnTop = true
-    billboard.LightInfluence = 0
-    billboard.Parent = part
-    local label = Instance.new('TextLabel')
-    label.BackgroundTransparency = 1
-    label.Size = UDim2.fromScale(1, 1)
-    label.Text = tostring(damage)
-    label.TextColor3 = DMG_NUMBER_COLOR
-    label.TextStrokeTransparency = 0
-    label.TextStrokeColor3 = Color3.new(0, 0, 0)
-    label.TextScaled = true
-    label.FontFace = verdanaFont
-    label.Parent = billboard
-    task.spawn(function()
-        local startTime = tick()
-        while part.Parent do
-            local age = tick() - startTime
-            local progress = age / DMG_DURATION
-            if progress >= 1 then break end
-            part.CFrame = CFrame.new(worldPos + Vector3.new(0, progress * DMG_RISE_SPEED, 0))
-            label.TextTransparency = progress
-            label.TextStrokeTransparency = progress
-            RunService.RenderStepped:Wait()
-        end
-        part:Destroy()
+    pcall(function()
+        local part = Instance.new('Part')
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanQuery = false
+        part.CanTouch = false
+        part.Massless = true
+        part.Transparency = 1
+        part.Size = Vector3.new(0.1, 0.1, 0.1)
+        part.CFrame = CFrame.new(worldPos)
+        part.Name = 'DmgNumber'
+        part.Parent = workspace
+        local billboard = Instance.new('BillboardGui')
+        billboard.Size = UDim2.fromOffset(140, 70)
+        billboard.AlwaysOnTop = true
+        billboard.LightInfluence = 0
+        billboard.Parent = part
+        local label = Instance.new('TextLabel')
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.fromScale(1, 1)
+        label.Text = tostring(damage)
+        label.TextColor3 = DMG_NUMBER_COLOR
+        label.TextStrokeTransparency = 0
+        label.TextStrokeColor3 = Color3.new(0, 0, 0)
+        label.TextScaled = true
+        label.FontFace = verdanaFont
+        label.Parent = billboard
+        task.spawn(function()
+            local startTime = tick()
+            while part.Parent do
+                local age = tick() - startTime
+                local progress = age / DMG_DURATION
+                if progress >= 1 then break end
+                part.CFrame = CFrame.new(worldPos + Vector3.new(0, progress * DMG_RISE_SPEED, 0))
+                label.TextTransparency = progress
+                label.TextStrokeTransparency = progress
+                RunService.RenderStepped:Wait()
+            end
+            part:Destroy()
+        end)
     end)
 end
 
@@ -475,22 +401,24 @@ local function watchForHit(humanoid)
     local startTime = tick()
     local conn
     conn = humanoid.HealthChanged:Connect(function(newHealth)
-        local dmg = lastHealth - newHealth
-        lastHealth = newHealth
-        if dmg > 0 then
-            playHitSound()
-            local char = humanoid.Parent
-            local head = char and char:FindFirstChild('Head')
-            if head then
-                createDamageNumber(head.Position + Vector3.new(0, 2.5, 0), math.floor(dmg + 0.5))
+        pcall(function()
+            local dmg = lastHealth - newHealth
+            lastHealth = newHealth
+            if dmg > 0 then
+                playHitSound()
+                local char = humanoid.Parent
+                local head = char and char:FindFirstChild('Head')
+                if head then
+                    createDamageNumber(head.Position + Vector3.new(0, 2.5, 0), math.floor(dmg + 0.5))
+                end
             end
-        end
-        if tick() - startTime > HIT_WINDOW then
-            if activeWatchers[humanoid] == conn then
-                conn:Disconnect()
-                activeWatchers[humanoid] = nil
+            if tick() - startTime > HIT_WINDOW then
+                if activeWatchers[humanoid] == conn then
+                    conn:Disconnect()
+                    activeWatchers[humanoid] = nil
+                end
             end
-        end
+        end)
     end)
     activeWatchers[humanoid] = conn
     task.delay(HIT_WINDOW + 0.1, function()
@@ -499,6 +427,56 @@ local function watchForHit(humanoid)
             activeWatchers[humanoid] = nil
         end
     end)
+end
+
+local function handleShotPacket(packet)
+    if typeof(packet) ~= 'table' then return end
+    local gun = nil
+    local char = LocalPlayer.Character
+    if char then
+        local tool = char:FindFirstChildOfClass('Tool')
+        if tool and tool:GetAttribute('ToolType') == 'Gun' then gun = tool end
+    end
+    local muzzlePos
+    if gun then
+        local muzzle = gun:FindFirstChild('Muzzle', true)
+        if muzzle then
+            if muzzle:IsA('BasePart') then
+                muzzlePos = muzzle.Position
+            elseif muzzle:IsA('Attachment') then
+                muzzlePos = muzzle.WorldPosition
+            end
+        end
+        if not muzzlePos then
+            local handle = gun:FindFirstChild('Handle')
+            if handle and handle:IsA('BasePart') then
+                muzzlePos = handle.Position
+            end
+        end
+    end
+    if not muzzlePos and char then
+        local head = char:FindFirstChild('Head')
+        muzzlePos = head and head.Position or Camera.CFrame.Position
+    end
+
+    for _, entry in ipairs(packet) do
+        if typeof(entry) == 'table' then
+            local origin = entry[1]
+            local endPos = entry[2]
+            local inst = entry[3]
+            if endPos then
+                createTracer(muzzlePos or origin or Camera.CFrame.Position, endPos)
+            end
+            if (hitsoundEnabled or dmgNumbersEnabled) and typeof(inst) == 'Instance' then
+                local model = inst:FindFirstAncestorOfClass('Model')
+                local targetChar = model or inst.Parent
+                local hum = targetChar and targetChar:FindFirstChildOfClass('Humanoid')
+                if hum and hum.Health > 0 then
+                    watchForHit(hum)
+                end
+            end
+        end
+    end
 end
 
 local flyBV, flyBG
@@ -599,48 +577,9 @@ RunService.RenderStepped:Connect(function()
     flyBG.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.LookVector)
 end)
 
-local fovGui = Instance.new('ScreenGui')
-fovGui.Name = 'SilentAimFOV'
-fovGui.IgnoreGuiInset = true
-fovGui.ResetOnSpawn = false
-fovGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-fovGui.Parent = game:GetService('CoreGui')
-
-local fovCircle = Instance.new('Frame')
-fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
-fovCircle.BackgroundTransparency = 1
-fovCircle.BorderSizePixel = 0
-fovCircle.Parent = fovGui
-
-local fovCorner = Instance.new('UICorner')
-fovCorner.CornerRadius = UDim.new(1, 0)
-fovCorner.Parent = fovCircle
-
-local fovStroke = Instance.new('UIStroke')
-fovStroke.Color = Color3.fromRGB(255, 255, 255)
-fovStroke.Thickness = 1
-fovStroke.Transparency = 0.3
-fovStroke.Parent = fovCircle
-
-local function updateFOVCircle()
-    local size = silentAimFOVRadius * 2
-    fovCircle.Size = UDim2.fromOffset(size, size)
-    fovCircle.Visible = silentAimFOVVisible and silentAimEnabled
-end
-
-updateFOVCircle()
-
-RunService.RenderStepped:Connect(function()
-    if not silentAimEnabled or not silentAimFOVVisible then return end
-    local mouse = UserInputService:GetMouseLocation()
-    fovCircle.Position = UDim2.fromOffset(mouse.X, mouse.Y)
-end)
-
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/ergthhejasert-wq/uilib/refs/heads/main/library.lua'))()
 
-if not Library then
-    error('ui failed to load.', 0)
-end
+if not Library then error('ui failed to load.', 0) end
 
 local Win = Library:Window('spel.script', UDim2.fromOffset(620, 560))
 local MainTab = Win:AddTab('Main')
@@ -648,7 +587,6 @@ local RageSub = MainTab:AddSubTab('Ragebot')
 local GunSub = MainTab:AddSubTab('Gun')
 
 local CombatL = RageSub:AddSection('ragebot', 'Left')
-local CombatR = RageSub:AddSection('visuals', 'Right')
 
 CombatL:AddToggle('ragebot', rageEnabled, function(on)
     rageEnabled = on
@@ -656,55 +594,54 @@ end):AddKeybind(Enum.KeyCode.E, {Mode = 'Toggle'})
 CombatL:AddTextbox('target team', TARGET_TEAM_NAME, 'team name...', function(text, enter)
     if text and text ~= '' then TARGET_TEAM_NAME = text end
 end)
-CombatR:AddToggle('tracers', tracersEnabled, function(on)
-    tracersEnabled = on
-end):AddColorpicker('tracer color', Color3.new(1, 1, 1), 1, function(c, a) end)
-CombatR:AddToggle('hitsounds', hitsoundEnabled, function(on)
-    hitsoundEnabled = on
-end)
-CombatR:AddToggle('damage numbers', dmgNumbersEnabled, function(on)
-    dmgNumbersEnabled = on
-end):AddColorpicker('damage color', DMG_NUMBER_COLOR, 1, function(c, a)
-    DMG_NUMBER_COLOR = c
-end)
 
+local KillAuraToggle = CombatL:AddToggle('melee killaura', meleeKillauraEnabled, function(on)
+    meleeKillauraEnabled = on
+end)
+CombatL:AddSlider('killaura range', 4, 40, MELEE_RANGE, function(v)
+    MELEE_RANGE = v
+end):DependsOn(KillAuraToggle, true)
+CombatL:AddSlider('killaura hit rate', 0.05, 1, MELEE_HIT_RATE, function(v)
+    MELEE_HIT_RATE = v
+end):DependsOn(KillAuraToggle, true)
+CombatL:AddSlider('max targets', 1, 5, MELEE_MAX_TARGETS, function(v)
+    MELEE_MAX_TARGETS = math.floor(v)
+end):DependsOn(KillAuraToggle, true)
+
+-- Gun subtab: gun on left, visuals on right
 local GunL = GunSub:AddSection('gun', 'Left')
-local GunR = GunSub:AddSection('aim', 'Right')
 
 local RapidFireToggle = GunL:AddToggle('rapid fire', rapidFireEnabled, function(on)
     rapidFireEnabled = on
     reapplyAllTools()
 end)
-
 GunL:AddSlider('rapid fire speed', 0, 100, rapidFirePercent, function(v)
     rapidFirePercent = v
     if rapidFireEnabled then reapplyAllTools() end
 end):DependsOn(RapidFireToggle, true)
-
 GunL:AddToggle('no recoil', noRecoilEnabled, function(on)
     noRecoilEnabled = on
     reapplyAllTools()
 end)
-
 GunL:AddToggle('no spread', noSpreadEnabled, function(on)
     noSpreadEnabled = on
     reapplyAllTools()
 end)
 
-local SilentAimToggle = GunR:AddToggle('silent aim', silentAimEnabled, function(on)
-    silentAimEnabled = on
-    updateFOVCircle()
+-- Visuals groupbox
+local VisualSec = GunSub:AddSection('visuals', 'Right')
+
+VisualSec:AddToggle('tracers', tracersEnabled, function(on)
+    tracersEnabled = on
+end):AddColorpicker('tracer color', Color3.new(1, 1, 1), 1, function(c, a) end)
+VisualSec:AddToggle('hitsounds', hitsoundEnabled, function(on)
+    hitsoundEnabled = on
 end)
-
-GunR:AddToggle('fov visible', silentAimFOVVisible, function(on)
-    silentAimFOVVisible = on
-    updateFOVCircle()
-end):DependsOn(SilentAimToggle, true)
-
-GunR:AddSlider('fov radius', 1, 500, silentAimFOVRadius, function(v)
-    silentAimFOVRadius = v
-    updateFOVCircle()
-end):DependsOn(SilentAimToggle, true)
+VisualSec:AddToggle('damage numbers', dmgNumbersEnabled, function(on)
+    dmgNumbersEnabled = on
+end):AddColorpicker('damage color', DMG_NUMBER_COLOR, 1, function(c, a)
+    DMG_NUMBER_COLOR = c
+end)
 
 local MoveTab = Win:AddTab('Movement')
 local MoveL = MoveTab:AddSection('fly', 'Left')
@@ -740,7 +677,6 @@ PlayersTab:PlayerList()
 local Settings = Win:AddTab('Settings')
 local AppSec = Settings:AddSection('appearance', 'Left')
 local ThemeNames = {}
-
 for _, T in Library.AppearanceThemes do
     ThemeNames[#ThemeNames + 1] = T.Name
 end
@@ -763,7 +699,6 @@ local MenuToggle = OverlaySec:AddToggle('menu', true, function(v)
     if Win.Gui then Library:FadeGui(Win.Gui, v) end
     if Library.SyncBlur then Library:SyncBlur() end
 end)
-
 MenuToggle:AddKeybind(Enum.KeyCode.RightShift, {Mode = 'Toggle'})
 OverlaySec:AddToggle('menu blur', false, function(v)
     Library._MenuBlurOn = v
@@ -775,9 +710,7 @@ end)
 OverlaySec:AddToggle('keybind list', true, function(v)
     if Library.KeybindListState then Library.KeybindListState:SetVisible(v) end
 end)
-OverlaySec:AddToggle('anonymous', false, function(v)
-    Library:AppApplyAnonymous(v)
-end)
+OverlaySec:AddToggle('anonymous', false, function(v) Library:AppApplyAnonymous(v) end)
 
 local CfgSec = Settings:AddSection('configs', 'Right')
 local CfgName = CfgSec:AddTextbox('config name', '', 'config name...')
@@ -809,7 +742,6 @@ end):AddButton('save', function()
     if Name == '' then return end
     CfgWrite(Name)
 end)
-
 CfgSec:AddButton('load', function()
     local Name = CfgCurrent()
     if Name == '' then return end
@@ -828,10 +760,7 @@ end):AddButton('delete', function()
     CfgList:Refresh(Library:ListConfigs())
 end)
 
-local Watermark = Library:Watermark({
-    Segments = {'spel.script', LocalPlayer.Name, '0 fps'},
-})
-
+local Watermark = Library:Watermark({ Segments = {'spel.script', LocalPlayer.Name, '0 fps'} })
 Library:KeybindList({Title = 'keybinds'})
 
 task.spawn(function()
@@ -852,28 +781,8 @@ local function getEquippedGun()
     local character = LocalPlayer.Character
     if not character then return nil end
     local tool = character:FindFirstChildOfClass('Tool')
-    if tool and tool:GetAttribute('ToolType') == 'Gun' then
-        return tool
-    end
+    if tool and tool:GetAttribute('ToolType') == 'Gun' then return tool end
     return nil
-end
-
-local function getMuzzlePosition(tool)
-    if not tool then
-        local char = LocalPlayer.Character
-        local head = char and char:FindFirstChild('Head')
-        return head and head.Position or Camera.CFrame.Position
-    end
-    local muzzle = tool:FindFirstChild('Muzzle', true)
-    if muzzle then
-        if muzzle:IsA('BasePart') then return muzzle.Position
-        elseif muzzle:IsA('Attachment') then return muzzle.WorldPosition end
-    end
-    local handle = tool:FindFirstChild('Handle')
-    if handle and handle:IsA('BasePart') then return handle.Position end
-    local char = LocalPlayer.Character
-    local head = char and char:FindFirstChild('Head')
-    return head and head.Position or Camera.CFrame.Position
 end
 
 local function updateAmmoLabel(tool)
@@ -917,6 +826,7 @@ local function autoReload(tool)
     end
 end
 
+-- Ragebot loop
 task.spawn(function()
     local reloading = false
     while true do
@@ -941,17 +851,73 @@ task.spawn(function()
                     if head and ShootEvent then
                         local origin = head.Position
                         local packet = {{origin, target.Position, target}}
-                        local muzzlePos = getMuzzlePosition(tool)
-                        createTracer(muzzlePos, target.Position)
                         pcall(function() ShootEvent:FireServer(packet) end)
-                        local tHum = target.Parent:FindFirstChildOfClass('Humanoid')
-                        if tHum then watchForHit(tHum) end
                         local newAmmo = ammo - 1
                         tool:SetAttribute('Local_CurrentAmmo', newAmmo)
                         updateAmmoLabel(tool)
                     end
                 end
             end
+        end
+    end
+end)
+
+-- Melee killaura (no Humanoid.Team access)
+task.spawn(function()
+    while true do
+        task.wait(MELEE_HIT_RATE)
+        if not meleeKillauraEnabled or not meleeEvent then continue end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild('HumanoidRootPart')
+        if not hrp then continue end
+        local hits = {}
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local isEnemy = not isSameTeam(plr)
+                if isEnemy then
+                    local tHrp = plr.Character:FindFirstChild('HumanoidRootPart')
+                    local tHum = plr.Character:FindFirstChildOfClass('Humanoid')
+                    if tHrp and tHum and tHum.Health > 0 then
+                        local d = (tHrp.Position - hrp.Position).Magnitude
+                        if d <= MELEE_RANGE then
+                            table.insert(hits, {d = d, player = plr})
+                        end
+                    end
+                end
+            end
+        end
+
+        for _, model in ipairs(workspace:GetChildren()) do
+            if model:IsA('Model') and model ~= char and not Players:GetPlayerFromCharacter(model) then
+                local tHum = model:FindFirstChildOfClass('Humanoid')
+                local tRoot = model:FindFirstChild('HumanoidRootPart') or model.PrimaryPart
+                if tHum and tRoot and tHum.Health > 0 then
+                    local isEnemy = true
+                    local teamVal = model:FindFirstChild('Team')
+                    if teamVal and teamVal:IsA('StringValue') and LocalPlayer.Team and teamVal.Value == LocalPlayer.Team.Name then
+                        isEnemy = false
+                    end
+                    if isEnemy then
+                        local d = (tRoot.Position - hrp.Position).Magnitude
+                        if d <= MELEE_RANGE then
+                            table.insert(hits, {d = d, model = model})
+                        end
+                    end
+                end
+            end
+        end
+
+        table.sort(hits, function(a, b) return a.d < b.d end)
+        local fired = 0
+        for _, h in ipairs(hits) do
+            if fired >= MELEE_MAX_TARGETS then break end
+            if h.player then
+                pcall(function() meleeEvent:FireServer(h.player, nil, 1) end)
+            elseif h.model then
+                pcall(function() meleeEvent:FireServer(h.model, nil, 1) end)
+            end
+            fired = fired + 1
         end
     end
 end)
@@ -991,61 +957,58 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.8)
     task.spawn(autoGrabWeapon)
 end)
-
 if LocalPlayer.Character then task.spawn(autoGrabWeapon) end
 
+-- ============================================================
+-- __namecall hook
+--   - No more silent aim / raycast rewrite
+--   - Only handles: Sit blocking, ShootEvent visuals, Gun attribute patches
+-- ============================================================
 local oldNamecall
-oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...))
+oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...)
     local method = getnamecallmethod()
     local self = ...
+
     if method == 'Sit' and typeof(self) == 'Instance' and self:IsA('Seat') then
         return nil
     end
-    if method == 'Raycast' and self == workspace and not checkcaller() then
-        if silentAimEnabled or rageEnabled then
-            local args = {...}
-            local rp = args[4]
-            local isBulletRay = typeof(rp) == 'RaycastParams'
-                and rp.CollisionGroup == 'ClientBullet'
-                or (typeof(rp) == 'RaycastParams'
-                    and typeof(rp.FilterDescendantsInstances) == 'table'
-                    and #rp.FilterDescendantsInstances == 2)
 
-            if isBulletRay then
-                local target
-                if silentAimEnabled then
-                    target = getSilentAimTarget()
-                end
-                if not target and rageEnabled then
-                    target = closestHitPart
-                end
-                if target and target.Parent then
-                    local origin = args[2]
-                    args[3] = (target.Position - origin).Unit * 1000
-                    return oldNamecall(unpack(args))
-                end
-            end
+    if method == 'FireServer' and self == ShootEvent then
+        local args = {...}
+        local packet = args[2]
+        if typeof(packet) == 'table' then
+            -- Visuals only — no packet rewriting
+            task.spawn(function()
+                pcall(handleShotPacket, packet)
+            end)
         end
+        return oldNamecall(...)
     end
+
     if method == 'GetAttributes' then
         local attrs = oldNamecall(...)
-        if typeof(attrs) == 'table' and typeof(self) == 'Instance' and self:IsA('Tool') and self:GetAttribute('ToolType') == 'Gun' then
-            if rapidFireEnabled then
-                attrs.FireRate = getEffectiveFireRate()
-                attrs.AutoFire = true
-            end
-            if noSpreadEnabled then
-                attrs.SpreadRadius = 0
-            end
-            if noRecoilEnabled then
-                for _, name in ipairs(RECOIL_ATTRS) do
-                    if attrs[name] ~= nil then
-                        attrs[name] = 0
+        if typeof(attrs) == 'table' then
+            pcall(function()
+                if typeof(self) == 'Instance' and self:IsA('Tool') and self:GetAttribute('ToolType') == 'Gun' then
+                    if rapidFireEnabled then
+                        attrs.FireRate = getEffectiveFireRate()
+                        attrs.AutoFire = true
+                    end
+                    if noSpreadEnabled then
+                        attrs.SpreadRadius = 0
+                    end
+                    if noRecoilEnabled then
+                        for _, name in ipairs(RECOIL_ATTRS) do
+                            if attrs[name] ~= nil then
+                                attrs[name] = 0
+                            end
+                        end
                     end
                 end
-            end
+            end)
         end
         return attrs
     end
+
     return oldNamecall(...)
 end))
