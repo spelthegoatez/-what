@@ -33,6 +33,9 @@ local rapidFireEnabled = false
 local rapidFirePercent = 100
 local noRecoilEnabled = false
 local noSpreadEnabled = false
+local silentAimEnabled = false
+local silentAimFOVVisible = true
+local silentAimFOVRadius = 120
 local GunRemotes = ReplicatedStorage:WaitForChild('GunRemotes', 10)
 local ShootEvent = GunRemotes and GunRemotes:WaitForChild('ShootEvent', 10)
 local FuncReload = GunRemotes and GunRemotes:WaitForChild('FuncReload', 10)
@@ -44,7 +47,6 @@ local function getEffectiveFireRate()
     if not rapidFireEnabled then
         return FIRE_RATE
     end
-
     return 0.001 + (FIRE_RATE - 0.001) * (rapidFirePercent / 100)
 end
 
@@ -242,38 +244,42 @@ RunService.Heartbeat:Connect(function()
     closestHitPart = getClosestEnemy()
 end)
 
-local Originals = {
-    recoilFn = setmetatable({}, {__mode = 'k'}),
-    tracked = setmetatable({}, {__mode = 'k'}),
+local RECOIL_ATTRS = {
+    'Recoil', 'RecoilAmount', 'RecoilMultiplier', 'RecoilScale',
+    'CameraRecoil', 'WeaponRecoil', 'GunRecoil', 'VerticalRecoil',
+    'HorizontalRecoil', 'RecoilKick', 'Kickback',
 }
 
-local function applyRecoil(w)
-    if not w or not w.Recoil then return end
-    if not Originals.recoilFn[w] then Originals.recoilFn[w] = w.Recoil.Function end
-    if noRecoilEnabled then
-        pcall(function()
-            w.Recoil.Function = function() return Vector2.zero end
-            w.Recoil.Value = Vector2.zero
-            w.Recoil.RotationValue = Vector3.zero
-            w.Recoil.RecoveryValue = Vector2.zero
-            w.Recoil.Time = 0
-        end)
-    else
-        pcall(function() w.Recoil.Function = Originals.recoilFn[w] end)
-    end
-end
+local Originals = {
+    toolAttrs = setmetatable({}, {__mode = 'k'}),
+}
 
 local function applyNoRecoil(tool)
     if not tool then return end
-    Originals.tracked[tool] = true
-    applyRecoil(tool)
-    pcall(function()
-        if noRecoilEnabled then
-            tool:SetAttribute('Recoil', 0)
-            tool:SetAttribute('RecoilMultiplier', 0)
-            tool:SetAttribute('CameraRecoil', 0)
+
+    if not Originals.toolAttrs[tool] then
+        local saved = {}
+        for _, name in ipairs(RECOIL_ATTRS) do
+            local v = tool:GetAttribute(name)
+            if v ~= nil then
+                saved[name] = v
+            end
         end
-    end)
+        Originals.toolAttrs[tool] = saved
+    end
+
+    if noRecoilEnabled then
+        for _, name in ipairs(RECOIL_ATTRS) do
+            pcall(function() tool:SetAttribute(name, 0) end)
+        end
+    else
+        local saved = Originals.toolAttrs[tool]
+        if saved then
+            for name, v in pairs(saved) do
+                pcall(function() tool:SetAttribute(name, v) end)
+            end
+        end
+    end
 end
 
 local function patchTool(tool)
@@ -558,6 +564,38 @@ RunService.RenderStepped:Connect(function()
     flyBG.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.LookVector)
 end)
 
+local fovGui = Instance.new('ScreenGui')
+fovGui.Name = 'SilentAimFOV'
+fovGui.IgnoreGuiInset = true
+fovGui.ResetOnSpawn = false
+fovGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+fovGui.Parent = game:GetService('CoreGui')
+
+local fovCircle = Instance.new('Frame')
+fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+fovCircle.Position = UDim2.fromScale(0.5, 0.5)
+fovCircle.BackgroundTransparency = 1
+fovCircle.BorderSizePixel = 0
+fovCircle.Parent = fovGui
+
+local fovCorner = Instance.new('UICorner')
+fovCorner.CornerRadius = UDim.new(1, 0)
+fovCorner.Parent = fovCircle
+
+local fovStroke = Instance.new('UIStroke')
+fovStroke.Color = Color3.fromRGB(255, 255, 255)
+fovStroke.Thickness = 1
+fovStroke.Transparency = 0.3
+fovStroke.Parent = fovCircle
+
+local function updateFOVCircle()
+    local size = silentAimFOVRadius * 2
+    fovCircle.Size = UDim2.fromOffset(size, size)
+    fovCircle.Visible = silentAimFOVVisible and silentAimEnabled
+end
+
+updateFOVCircle()
+
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/ergthhejasert-wq/uilib/refs/heads/main/library.lua'))()
 
 if not Library then
@@ -591,6 +629,7 @@ end):AddColorpicker('damage color', DMG_NUMBER_COLOR, 1, function(c, a)
 end)
 
 local GunL = GunSub:AddSection('gun', 'Left')
+local GunR = GunSub:AddSection('aim', 'Right')
 
 local RapidFireToggle = GunL:AddToggle('rapid fire', rapidFireEnabled, function(on)
     rapidFireEnabled = on
@@ -611,6 +650,21 @@ GunL:AddToggle('no spread', noSpreadEnabled, function(on)
     noSpreadEnabled = on
     reapplyAllTools()
 end)
+
+local SilentAimToggle = GunR:AddToggle('silent aim', silentAimEnabled, function(on)
+    silentAimEnabled = on
+    updateFOVCircle()
+end)
+
+GunR:AddToggle('fov visible', silentAimFOVVisible, function(on)
+    silentAimFOVVisible = on
+    updateFOVCircle()
+end):DependsOn(SilentAimToggle, true)
+
+GunR:AddSlider('fov radius', 1, 500, silentAimFOVRadius, function(v)
+    silentAimFOVRadius = v
+    updateFOVCircle()
+end):DependsOn(SilentAimToggle, true)
 
 local MoveTab = Win:AddTab('Movement')
 local MoveL = MoveTab:AddSection('fly', 'Left')
@@ -908,13 +962,37 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...)
         return nil
     end
     if method == 'Raycast' and self == workspace and not checkcaller() then
-        if rageEnabled then
-            local target = closestHitPart
+        if rageEnabled or silentAimEnabled then
+            local target
+            if rageEnabled then
+                target = closestHitPart
+            else
+                target = closestHitPart
+            end
             if target and target.Parent then
-                local args = {...}
-                local origin = args[2]
-                args[3] = (target.Position - origin).Unit * 1000
-                return oldNamecall(unpack(args))
+                if silentAimEnabled then
+                    local head = target.Parent:FindFirstChild('Head')
+                    if head then
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                        if onScreen then
+                            local center = Camera.ViewportSize * 0.5
+                            local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                            if dist > silentAimFOVRadius then
+                                target = nil
+                            end
+                        else
+                            target = nil
+                        end
+                    else
+                        target = nil
+                    end
+                end
+                if target and target.Parent then
+                    local args = {...}
+                    local origin = args[2]
+                    args[3] = (target.Position - origin).Unit * 1000
+                    return oldNamecall(unpack(args))
+                end
             end
         end
     end
@@ -924,6 +1002,13 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(...)
             attrs.FireRate = getEffectiveFireRate()
             attrs.AutoFire = true
             if noSpreadEnabled then attrs.SpreadRadius = 0 end
+            if noRecoilEnabled then
+                for _, name in ipairs(RECOIL_ATTRS) do
+                    if attrs[name] ~= nil then
+                        attrs[name] = 0
+                    end
+                end
+            end
         end
         return attrs
     end
