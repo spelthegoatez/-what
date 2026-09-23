@@ -41,6 +41,31 @@ if CameraController and CameraController.updateCamera then
     end
 end
 
+-- ============================================================
+-- Anti-Flash: hook the FlashEffect VFX module
+-- ============================================================
+local FlashEffect
+do
+    local ok, mod = pcall(function()
+        return require(ReplicatedStorage.Components.Common.VFXLibary.FlashEffect)
+    end)
+    if ok and type(mod) == 'table' and type(mod.Flash) == 'function' then
+        FlashEffect = mod
+        local OldFlash = mod.Flash
+        mod.Flash = function(...)
+            if State and State.AntiFlash then
+                pcall(function()
+                    if type(mod.CancelFlash) == 'function' then
+                        mod.CancelFlash()
+                    end
+                end)
+                return false
+            end
+            return OldFlash(...)
+        end
+    end
+end
+
 local State = {
     Aimbot = false,
     AimbotTarget = nil,
@@ -64,6 +89,7 @@ local State = {
     HeadHitsoundPack = 'cs:go',
     BodyHitsoundPack = 'cs:go',
     RemoveGameHit = false,
+    AntiFlash = false,
     Spinbot = false,
     SpinbotSpeed = 360,
     ThirdPerson = false,
@@ -212,28 +238,25 @@ end
 local function isHeadHit(inst)
     if not inst then return false end
     if inst.Name == 'Head' then return true end
-    local parent = inst.Parent
-    while parent and parent ~= workspace do
-        if parent.Name == 'Head' then return true end
-        if parent:IsA('Accessory') or parent:IsA('Hat') then
-            local accHandle = parent:FindFirstChild('Handle')
-            if accHandle and inst == accHandle then return true end
-            if accHandle then
-                local model = parent.Parent
-                if model and model:FindFirstChild('Head') then
-                    -- accessory parented to the character; check whether its attachment is on the head
-                    local head = model:FindFirstChild('Head')
-                    if head then
-                        for _, att in ipairs(parent:GetDescendants()) do
-                            if att:IsA('Attachment') and att.Parent and att.Parent:IsDescendantOf(head) then
-                                return true
-                            end
-                        end
+    local char = inst:FindFirstAncestorOfClass('Model')
+    if char and char:IsDescendantOf(Characters) then
+        local head = char:FindFirstChild('Head')
+        if head then
+            if inst:IsDescendantOf(head) then return true end
+            local parent = inst.Parent
+            if parent and (parent:IsA('Accessory') or parent:IsA('Hat')) then
+                for _, att in ipairs(parent:GetDescendants()) do
+                    if att:IsA('Attachment') and att.Parent and att.Parent:IsDescendantOf(head) then
+                        return true
                     end
+                end
+                local attName = parent:GetAttribute('AttachmentPoint')
+                if attName == 'HatAttachment' or attName == 'HairAttachment'
+                   or attName == 'FaceFrontAttachment' or attName == 'FaceCenterAttachment' then
+                    return true
                 end
             end
         end
-        parent = parent.Parent
     end
     return false
 end
@@ -804,7 +827,8 @@ Bullet._performRaycast = function(Self, Spread)
         for _, hit in ipairs(Result.Hits) do
             if partIsEnemy(hit.Instance) then
                 local head = isHeadHit(hit.Instance)
-                playHitsound(head and State.HeadHitsoundPack or State.BodyHitsoundPack)
+                local pack = head and State.HeadHitsoundPack or State.BodyHitsoundPack
+                playHitsound(pack)
                 break
             end
         end
@@ -1336,14 +1360,16 @@ local HITSOUND_OPTIONS = {
     'bubble', 'osu', 'among us', 'minecraft ding', 'minecraft',
 }
 
-local HeadHitsoundDropdown = RegisterSec:AddDropdown('head sound', HITSOUND_OPTIONS, 'cs:go', function(v)
+-- HEAD hitsound dropdown
+local HeadHitsoundDropdown = RegisterSec:AddDropdown('head hitsound', HITSOUND_OPTIONS, 'cs:go', function(v)
     State.HeadHitsoundPack = v
-end)
+end, { Tooltip = 'plays this sound when you hit someone in the HEAD' })
 HeadHitsoundDropdown:DependsOn(HitsoundsToggle, true)
 
-local BodyHitsoundDropdown = RegisterSec:AddDropdown('body sound', HITSOUND_OPTIONS, 'cs:go', function(v)
+-- BODY hitsound dropdown
+local BodyHitsoundDropdown = RegisterSec:AddDropdown('body hitsound', HITSOUND_OPTIONS, 'cs:go', function(v)
     State.BodyHitsoundPack = v
-end)
+end, { Tooltip = 'plays this sound when you hit someone in the BODY' })
 BodyHitsoundDropdown:DependsOn(HitsoundsToggle, true)
 
 local RemoveGameHitToggle = RegisterSec:AddToggle('remove game hit', false, function(on) State.RemoveGameHit = on end, { Tooltip = "mutes the game's built-in hitmarker sounds" })
@@ -1354,6 +1380,23 @@ local MusicDropdown = RegisterSec:AddDropdown('music', {
     'among us theme', 'relaxed scene', 'menu theme', 'super aura',
 }, 'among us theme', function(v) State.MusicTrack = v; updateMusic() end)
 MusicDropdown:DependsOn(MusicToggle, true)
+
+-- ============================================================
+-- Anti-Flash section (new)
+-- ============================================================
+local AntiFlashSec = RegisterTab:AddSection('Anti-Flash', 'Right')
+
+local AntiFlashToggle = AntiFlashSec:AddToggle('anti flash', false, function(on)
+    State.AntiFlash = on
+    if on and FlashEffect and type(FlashEffect.CancelFlash) == 'function' then
+        pcall(function() FlashEffect.CancelFlash() end)
+    end
+end, { Tooltip = 'blocks flashbang effect (both the white overlay and the screen fade)' })
+
+local FlashEffectAvailable = FlashEffect ~= nil
+if not FlashEffectAvailable then
+    AntiFlashToggle:Set(false)
+end
 
 local DamageNumSec = RegisterTab:AddSection('Damage Numbers', 'Right')
 
