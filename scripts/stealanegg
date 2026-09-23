@@ -1,0 +1,499 @@
+local library = 'https://raw.githubusercontent.com/ergthhejasert-wq/uilib/refs/heads/main/library.lua'
+local Library = loadstring(game:HttpGet(library))()
+
+if not Library then
+    error('ui failed to load.', 1)
+end
+
+local Players = game:GetService('Players')
+local RunService = game:GetService('RunService')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local TweenService = game:GetService('TweenService')
+
+local LocalPlayer = Players.LocalPlayer
+
+local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local EggWorld = Remotes.EggWorld
+local Homestead = Remotes.Homestead
+local Codex = Remotes.Codex
+local AwayEarnings = Remotes.AwayEarnings
+local OnboardingQuestline = Remotes.OnboardingQuestline
+local GuardOnboarding = Remotes.GuardOnboarding
+
+local EggState = require(ReplicatedStorage.Client.EggState)
+local EggToolDisplay = require(ReplicatedStorage.Shared.Eggs.EggToolDisplay)
+local EggPlacementRaycast = require(ReplicatedStorage.Shared.Eggs.EggPlacementRaycast)
+local PlotState = require(ReplicatedStorage.Client.PlotState)
+local PlacedEggRenderer = require(ReplicatedStorage.Shared.Eggs.PlacedEggRenderer)
+
+local State = {
+    AutoHatch = false,
+    AutoPlaceEgg = false,
+    TweenToBase = false,
+    AutoUpgradeBase = false,
+    AutoRedeemCodex = false,
+    AutoCollectIdle = false,
+    AutoClaimQuests = false,
+    AutoSkipTutorial = false,
+    WalkSpeedEnabled = false,
+    WalkSpeed = 16,
+    Noclip = false,
+}
+
+local function getLocalCharacter()
+    return LocalPlayer.Character
+end
+
+local function getHeldEggTool()
+    local char = getLocalCharacter()
+    if not char then return nil end
+    for _, child in ipairs(char:GetChildren()) do
+        if child.ClassName == 'Tool' and EggToolDisplay.IsEggTool(child) then
+            return child
+        end
+    end
+    return nil
+end
+
+local function tweenToBase()
+    local char = getLocalCharacter()
+    if not char then return false end
+    local hrp = char:FindFirstChild('HumanoidRootPart')
+    if not hrp then return false end
+
+    local plot = PlotState.ResolvePlot()
+    if not plot or not plot.CenterPoint then return false end
+
+    local targetPos = plot.CenterPoint.CFrame.Position + Vector3.new(0, 3, 0)
+    local targetCFrame = CFrame.new(targetPos, targetPos + plot.CenterPoint.CFrame.LookVector)
+
+    local tween = TweenService:Create(hrp, TweenInfo.new(1.2, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {
+        CFrame = targetCFrame
+    })
+    tween:Play()
+    tween.Completed:Wait()
+    return true
+end
+
+local function autoPlaceEgg()
+    local char = getLocalCharacter()
+    if not char then return false end
+
+    local hrp = char:FindFirstChild('HumanoidRootPart')
+    if not hrp then return false end
+
+    local tool = getHeldEggTool()
+
+    if not tool then
+        local backpack = LocalPlayer:FindFirstChild('Backpack')
+        if backpack then
+            for _, child in ipairs(backpack:GetChildren()) do
+                if child.ClassName == 'Tool' and EggToolDisplay.IsEggTool(child) then
+                    tool = child
+                    break
+                end
+            end
+        end
+    end
+
+    if not tool then return false end
+
+    local ToolUid = EggToolDisplay.GetToolUid(tool)
+    if not ToolUid then return false end
+
+    local plot = PlotState.ResolvePlot()
+    if not plot then return false end
+
+    local PetArea = plot.PetArea
+    local rayResult = EggPlacementRaycast.Raycast(PetArea, LocalPlayer.UserId)
+
+    if not rayResult or rayResult.Instance ~= PetArea then
+        local centerPos = plot.CenterPoint.CFrame.Position
+        local objSpace = plot.CenterPoint.CFrame:ToObjectSpace(CFrame.new(centerPos))
+        local ok = EggState.PlantEgg(ToolUid, objSpace)
+        if ok then
+            PlacedEggRenderer.Refresh()
+            return true
+        end
+        return false
+    end
+
+    local objSpace = plot.CenterPoint.CFrame:ToObjectSpace(CFrame.new(rayResult.Position))
+    local ok = EggState.PlantEgg(ToolUid, objSpace)
+    if ok then
+        PlacedEggRenderer.Refresh()
+        return true
+    end
+
+    return false
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if State.AutoHatch then
+            pcall(function()
+                EggWorld.AskHatch:InvokeServer()
+            end)
+            pcall(function()
+                EggWorld.AskFinishHatch:InvokeServer()
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.4)
+        if State.AutoPlaceEgg then
+            pcall(function()
+                EggWorld.AskFieldEggCarry:InvokeServer()
+            end)
+            task.wait(0.15)
+
+            if State.TweenToBase and getHeldEggTool() then
+                pcall(tweenToBase)
+            end
+
+            pcall(function()
+                autoPlaceEgg()
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if State.AutoUpgradeBase then
+            pcall(function()
+                Homestead.AskBaseTierRaise:FireServer()
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if State.AutoRedeemCodex then
+            pcall(function()
+                Codex.AskRedeemAll:InvokeServer()
+            end)
+            pcall(function()
+                Codex.AskRedeemLimitedEgg:InvokeServer()
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if State.AutoCollectIdle then
+            pcall(function()
+                AwayEarnings.AskCollect:InvokeServer()
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if State.AutoClaimQuests then
+            pcall(function()
+                OnboardingQuestline.AskClaim:InvokeServer()
+            end)
+            pcall(function()
+                OnboardingQuestline.AskAcknowledge:InvokeServer()
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if State.AutoSkipTutorial then
+            pcall(function()
+                GuardOnboarding.AskProgressSync:InvokeServer({
+                    Completed = true,
+                    CurrentStepId = nil
+                })
+            end)
+        end
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    if not State.WalkSpeedEnabled then return end
+    local char = getLocalCharacter()
+    if not char then return end
+    local hum = char:FindFirstChildOfClass('Humanoid')
+    if hum and hum.WalkSpeed ~= State.WalkSpeed then
+        hum.WalkSpeed = State.WalkSpeed
+    end
+end)
+
+local originalCollides = {}
+local noclipConnection = nil
+
+local function enforceNoclip()
+    local char = getLocalCharacter()
+    if not char or not char.Parent then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA('BasePart') then
+            if originalCollides[part] == nil then
+                originalCollides[part] = part.CanCollide
+            end
+            part.CanCollide = false
+        end
+    end
+end
+
+local function enableNoclip()
+    if noclipConnection then return end
+    originalCollides = {}
+    enforceNoclip()
+    noclipConnection = RunService.Stepped:Connect(function()
+        local char = getLocalCharacter()
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA('BasePart') and part.CanCollide then
+                if originalCollides[part] == nil then
+                    originalCollides[part] = true
+                end
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function disableNoclip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    for part, val in pairs(originalCollides) do
+        if part and part.Parent and part:IsA('BasePart') then
+            pcall(function()
+                part.CanCollide = val
+            end)
+        end
+    end
+    originalCollides = {}
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    if State.Noclip then
+        originalCollides = {}
+        enforceNoclip()
+    end
+    if State.WalkSpeedEnabled then
+        local hum = char:FindFirstChildOfClass('Humanoid')
+        if hum then
+            hum.WalkSpeed = State.WalkSpeed
+        end
+    end
+end)
+
+local Win = Library:Window('spel.script', UDim2.fromOffset(620, 560))
+
+local FarmingTab = Win:AddTab('Farming')
+
+local EggSub = FarmingTab:AddSubTab('Egg')
+local EggSec = EggSub:AddSection('Automation', 'Left')
+
+EggSec:AddToggle('auto hatch', false, function(on)
+    State.AutoHatch = on
+end)
+
+local AutoPlaceToggle = EggSec:AddToggle('auto place egg', false, function(on)
+    State.AutoPlaceEgg = on
+end)
+
+EggSec:AddToggle('tween to base', false, function(on)
+    State.TweenToBase = on
+end):DependsOn(AutoPlaceToggle, true)
+
+local BaseSub = FarmingTab:AddSubTab('Base')
+local BaseSec = BaseSub:AddSection('Homestead', 'Left')
+
+BaseSec:AddToggle('auto upgrade base', false, function(on)
+    State.AutoUpgradeBase = on
+end)
+
+local ClaimSub = FarmingTab:AddSubTab('Claim')
+local ClaimSec = ClaimSub:AddSection('Rewards', 'Left')
+
+ClaimSec:AddToggle('auto redeem codes', false, function(on)
+    State.AutoRedeemCodex = on
+end)
+
+ClaimSec:AddToggle('auto collect idle earnings', false, function(on)
+    State.AutoCollectIdle = on
+end)
+
+ClaimSec:AddToggle('auto claim quests', false, function(on)
+    State.AutoClaimQuests = on
+end)
+
+local MiscTab = Win:AddTab('Misc')
+local PlayerSub = MiscTab:AddSubTab('Player')
+local PlayerSec = PlayerSub:AddSection('Movement', 'Left')
+
+local WalkSpeedToggle = PlayerSec:AddToggle('walkspeed', false, function(on)
+    State.WalkSpeedEnabled = on
+    if not on then
+        local char = getLocalCharacter()
+        local hum = char and char:FindFirstChildOfClass('Humanoid')
+        if hum then
+            hum.WalkSpeed = 16
+        end
+    end
+end)
+
+PlayerSec:AddSlider('speed', 1, 200, State.WalkSpeed, function(v)
+    State.WalkSpeed = v
+end):DependsOn(WalkSpeedToggle, true)
+
+PlayerSec:AddToggle('noclip', false, function(on)
+    State.Noclip = on
+    if on then
+        enableNoclip()
+    else
+        disableNoclip()
+    end
+end)
+
+local OtherSub = MiscTab:AddSubTab('Other')
+local OtherSec = OtherSub:AddSection('Tutorial', 'Left')
+
+OtherSec:AddToggle('auto skip tutorial', false, function(on)
+    State.AutoSkipTutorial = on
+end)
+
+local PlayersTab = Win:AddTab('Players')
+local Filters = PlayersTab:AddSection('Filters', 'Left')
+
+Filters:AddToggle('team check', false)
+Filters:AddDropdown('sort by', { 'Name', 'Distance', 'Team' }, 'Name', function(v) end)
+Filters:AddToggle('show hidden', false)
+Filters:AddToggle('highlight target', true)
+PlayersTab:PlayerList()
+
+local Settings = Win:AddTab('Settings')
+local AppSec = Settings:AddSection('Appearance', 'Left')
+
+local ThemeNames = {}
+for _, T in Library.AppearanceThemes do
+    ThemeNames[#ThemeNames + 1] = T.Name
+end
+
+AppSec:AddDropdown('theme', ThemeNames, 'Default', function(name)
+    Library:ApplyTheme(name)
+end)
+AppSec:AddColorpicker('accent',        Library.Palette.Default.Accent,       1, function(c) Library:AppApplyAccent(c) end)
+AppSec:AddColorpicker('background',    Library.Palette.Default.Top,          1, function(c) Library:AppApplyBackTop(c) end)
+AppSec:AddColorpicker('lowlight',      Library.Palette.Default.Bottom,       1, function(c) Library:AppApplyBackBottom(c) end)
+AppSec:AddColorpicker('outline',       Library.Palette.Default.Outline,      1, function(c) Library:AppApplyOutline(c) end)
+AppSec:AddColorpicker('inner outline', Library.Palette.Default.InnerOutline, 1, function(c) Library:AppApplyInnerOutline(c) end)
+AppSec:AddColorpicker('title color',   Library.Palette.Default.TitleBottom,  1, function(c) Library:AppApplyTitleColor(c) end)
+AppSec:AddColorpicker('shadow color',  Library.Palette.Default.Shadow,       1, function(c) Library:AppApplyShadow(c) end)
+AppSec:AddSlider('shadow size',   0,  40, Library.Palette.Default.ShadowSize,   function(v) Library:AppApplyShadowSize(v) end)
+AppSec:AddSlider('shadow offset', -20, 20, Library.Palette.Default.ShadowOffset, function(v) Library:AppApplyShadowOffset(v) end)
+
+local OverlaySec = Settings:AddSection('Overlay', 'Left')
+
+local MenuToggle = OverlaySec:AddToggle('menu', true, function(v)
+    if Win.Gui then Library:FadeGui(Win.Gui, v) end
+    if Library.SyncBlur then Library:SyncBlur() end
+end)
+
+MenuToggle:AddKeybind(Enum.KeyCode.RightShift, { Mode = 'Toggle' })
+OverlaySec:AddToggle('menu blur', false, function(v)
+    Library._MenuBlurOn = v
+    if Library.SyncBlur then Library:SyncBlur() end
+end)
+OverlaySec:AddToggle('watermark', true, function(v)
+    if Library.WatermarkState then Library.WatermarkState:SetVisible(v) end
+end)
+OverlaySec:AddToggle('keybind list', true, function(v)
+    if Library.KeybindListState then Library.KeybindListState:SetVisible(v) end
+end)
+OverlaySec:AddToggle('anonymous', false, function(v)
+    Library:AppApplyAnonymous(v)
+end)
+
+local CfgSec = Settings:AddSection('Configs', 'Right')
+local CfgName = CfgSec:AddTextbox('config name', '', 'config name...')
+local CfgList = CfgSec:AddList('saved', Library:ListConfigs(), {
+    Height = 96,
+    Callback = function(v)
+        if v and v ~= '' then CfgName:Set(v) end
+    end,
+})
+
+local function CfgCurrent()
+    return (CfgName:Get():gsub('^%s+', ''):gsub('%s+$', ''))
+end
+
+local function CfgWrite(Name)
+    if typeof(writefile) ~= 'function' then return end
+    Library:EnsureConfigsFolder()
+    local Json = Library:GetConfig()
+    writefile(Library:ConfigPath(Name), (typeof(Json) == 'string') and Json or '{}')
+    CfgList:Refresh(Library:ListConfigs())
+end
+
+CfgSec:AddButton('create', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    CfgWrite(Name)
+end):AddButton('save', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    CfgWrite(Name)
+end)
+
+CfgSec:AddButton('load', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    if typeof(readfile) ~= 'function' then return end
+    local Path = Library:ConfigPath(Name)
+    if typeof(isfile) == 'function' and not isfile(Path) then return end
+    local Data = readfile(Path)
+    if typeof(Data) == 'string' then Library:LoadConfig(Data) end
+end):AddButton('delete', function()
+    local Name = CfgCurrent()
+    if Name == '' then return end
+    if typeof(delfile) ~= 'function' then return end
+    local Path = Library:ConfigPath(Name)
+    if typeof(isfile) == 'function' and not isfile(Path) then return end
+    delfile(Path)
+    CfgList:Refresh(Library:ListConfigs())
+end)
+
+local Watermark = Library:Watermark({
+    Segments = { 'spel.script', LocalPlayer.Name, '0 fps' },
+})
+
+Library:KeybindList({ Title = 'keybinds' })
+
+task.spawn(function()
+    local Acc, Frames = 0, 0
+    while Watermark and Watermark.Gui and Watermark.Gui.Parent do
+        local Dt = RunService.RenderStepped:Wait()
+        Acc = Acc + Dt
+        Frames = Frames + 1
+        if Acc >= 0.25 then
+            Watermark:SetSegment(3, tostring(math.floor(Frames / Acc + 0.5)) .. ' fps')
+            Acc = 0
+            Frames = 0
+        end
+    end
+end)
+
+return Library
